@@ -420,6 +420,10 @@ await test('WBS chart and usage views (tables and workload chart)', async () => 
   const wn = await js('document.querySelectorAll(".wnode").length'), wt = await js('D.tasks.length + 1');
   ok(wn === wt, `one WBS box per task + the project (${wn} boxes, expected ${wt}; view=${await js('view')}; collapsed=${await js('[...collapsed].join()')})`);
   ok(await js('document.querySelectorAll(".wedge").length') === await js('D.tasks.filter(t => t.level > 0).length'), 'lines only between phases and their subtasks (none from the project card)');
+  const colors = await js(`[...new Set([...document.querySelectorAll('.wnode[data-level]')].map(n => n.dataset.level + '=' + getComputedStyle(n).borderTopColor))]`);
+  const byLevel = new Map(colors.map(c => c.split('=')));
+  ok(byLevel.size >= 2 && new Set(byLevel.values()).size === byLevel.size, 'each level has its own color: ' + colors.join(', '));
+  ok(await js('document.querySelectorAll(".wlegend span").length') === byLevel.size, 'legend lists each level');
   await shot('12-wbs');
   await key('4', 'Digit4', 52);
   await waitFor(() => js('!!document.querySelector("table.usage")'), 'usage table');

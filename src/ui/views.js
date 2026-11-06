@@ -48,7 +48,8 @@ function network() {
     </defs>${es}</svg>${nodes || `<div class="empty">${T('No tasks yet.')}</div>`}</div></div>`;
 }
 
-/* WBS: the phase structure as a top-down tree. */
+/* WBS: the phase structure as a top-down tree, one color per outline level. */
+const LEVEL_COLORS = 6;
 function wbsView() {
   const ts = D.tasks, par = parentsOf(ts), kids = ts.map(() => []), roots = [];
   ts.forEach((t, i) => (par[i] >= 0 ? kids[par[i]] : roots).push(i));
@@ -71,8 +72,8 @@ function wbsView() {
     const { x, y } = pos.get(i);
     if (i < 0) return `<div class="wnode s" style="left:${x}px;top:${y}px"><b>${esc(D.name)}</b><small>${niceY(0)} → ${niceY(Math.floor((D.finish - 1) / 1440))}</small><small>${money(D.cost)} · ${(+D.progress).toFixed(0)}%</small><div class="pb"><div style="width:${D.progress}%"></div></div></div>`;
     const t = ts[i];
-    return `<div class="wnode ${t.summary ? 's' : ''} ${t.crit ? 'c' : ''} ${sel.has(t.id) ? 'sel' : ''}" style="left:${x}px;top:${y}px" data-node="${t.id}" title="${esc(t.name)}">
-      <small>${t.wbs}${t.summary && collapsed.has(t.id) ? ' · ' + T('{0} hidden', subtreeEnd(ts, i) - i - 1) : ''}</small><b>${esc(t.name)}</b>
+    return `<div class="wnode lv${t.level % LEVEL_COLORS} ${t.summary ? 's' : ''} ${t.crit ? 'c' : ''} ${sel.has(t.id) ? 'sel' : ''}" style="left:${x}px;top:${y}px" data-node="${t.id}" data-level="${t.level}" title="${esc(t.name)}">
+      <small class="wnum">${t.wbs}${t.summary && collapsed.has(t.id) ? ' · ' + T('{0} hidden', subtreeEnd(ts, i) - i - 1) : ''}${t.crit ? ` <span class="wcrit" title="${T('Critical')}">●</span>` : ''}</small><b>${esc(t.name)}</b>
       <small>${mmdd(sDay(t))} → ${mmdd(fDay(t))} · ${t.summary ? fmtDays(t.span) : fmtDur(t.edur, t.elapsed)}</small><small>${t.cost ? money(t.cost) + ' · ' : ''}${Math.round(t.summary ? t.pctR : t.pct)}%</small>
       <div class="pb"><div style="width:${t.summary ? t.pctR : t.pct}%"></div></div></div>`;
   };
@@ -82,11 +83,14 @@ function wbsView() {
     if (pi >= 0) {
       const q = pos.get(pi);
       const x1 = q.x + NW / 2, y1 = q.y + 78, x2 = p.x + NW / 2, y2 = p.y, my = (y1 + y2) / 2;
-      edges += `<path class="wedge" d="M${x1},${y1} V${my} H${x2} V${y2}"/>`;
+      edges += `<path class="wedge lv${ts[i].level % LEVEL_COLORS}" d="M${x1},${y1} V${my} H${x2} V${y2}"/>`;
     }
   }
   const W = cursor + 40, H = 20 + (maxDepth + 1) * LH + 20;
-  return `<div class="view" data-v="wbs"><div class="net" style="width:${W}px;height:${H}px"><svg width="${W}" height="${H}" style="position:absolute;left:0;top:0">${edges}</svg>${nodes}</div></div>`;
+  // Legend: one chip per level that appears in the chart.
+  const levels = [...new Set(ts.map(t => t.level))].sort((a, b) => a - b);
+  const legend = levels.length ? `<div class="wlegend">${levels.map(l => `<span class="lv${l % LEVEL_COLORS}"><i></i>${T('Level {0}', l + 1)}</span>`).join('')}</div>` : '';
+  return `<div class="view" data-v="wbs"><div class="net" style="width:${W}px;height:${H}px">${legend}<svg width="${W}" height="${H}" style="position:absolute;left:0;top:0">${edges}</svg>${nodes}</div></div>`;
 }
 
 /* ---------- usage ---------- */

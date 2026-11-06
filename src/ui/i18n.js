@@ -163,7 +163,7 @@ const ES = {
   "Variance at completion": "Variación a la conclusión", "SPI below 1 means behind schedule; CPI below 1 means over budget.": "SPI menor que 1 = atrasado; CPI menor que 1 = por encima del presupuesto.",
   "No baseline with costs yet — planned value uses the current plan.": "Aún no hay línea base con costos — el valor planificado usa el plan actual.", "By task": "Por tarea", "critical path": "ruta crítica",
   "Problem": "Problema", "Details": "Detalles", "Late or slipping tasks": "Tareas atrasadas o que se desvían", "Slip vs baseline": "Desvío vs línea base", "No tasks yet.": "Aún no hay tareas.",
-  "{0} hidden": "{0} ocultas", "By person": "Por persona", "Workload chart": "Gráfico de carga", "Hours of work per {0}": "Horas de trabajo por {0}", "day": "día", "week": "semana", "month": "mes",
+  "{0} hidden": "{0} ocultas", "Level {0}": "Nivel {0}", "By person": "Por persona", "Workload chart": "Gráfico de carga", "Hours of work per {0}": "Horas de trabajo por {0}", "day": "día", "week": "semana", "month": "mes",
   "Other projects": "Otros proyectos", "{0}h planned": "{0}h previstas", "Assign people to tasks to see their workload.": "Asigna personas a las tareas para ver su carga de trabajo.",
   "Bars: planned hours (red = more than they can work). Orange line: available hours. Grey: other projects sharing the team file.": "Barras: horas previstas (rojo = más de las que pueden trabajar). Línea naranja: horas disponibles. Gris: otros proyectos que comparten el archivo de equipo.",
   "Person / task": "Persona / tarea", "Team total": "Total del equipo", "Project hours": "Horario del proyecto", "wk": "sem", "Never": "Nunca",

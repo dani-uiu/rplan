@@ -262,6 +262,16 @@ svg.links{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
 .wnode .pb{height:3px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden}
 .wnode .pb>div{height:100%;background:var(--good)}
 .wedge{fill:none;stroke:var(--dim);stroke-width:1.4}
+/* One color per outline level (cycles after six). */
+.lv0{--lvc:#7c5cff}.lv1{--lvc:#3b82f6}.lv2{--lvc:#14b8a6}.lv3{--lvc:#f59e0b}.lv4{--lvc:#ec4899}.lv5{--lvc:#22c55e}
+.wnode[class*="lv"]{border-top:4px solid var(--lvc);background:color-mix(in srgb,var(--lvc) 10%,var(--panel))}
+.wnode[class*="lv"] .wnum{color:var(--lvc);font-weight:700}
+.wnode[class*="lv"] .pb>div{background:var(--lvc)}
+.wnode .wcrit{color:var(--cr1)}
+.wedge[class*="lv"]{stroke:var(--lvc);stroke-width:1.8;opacity:.8}
+.wlegend{position:absolute;left:220px;top:28px;display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--mut);z-index:1}
+.wlegend span{display:flex;align-items:center;gap:6px}
+.wlegend i{width:12px;height:12px;border-radius:3px;background:var(--lvc)}
 
 /* people + usage */
 .res .row{height:var(--rh)}
