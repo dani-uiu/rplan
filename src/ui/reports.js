@@ -31,6 +31,7 @@ function renderReport() {
     <span class="mut">${T('Paper')}</span><select data-rep="paper">${['A4', 'Letter', 'A3', 'Legal'].map(p => `<option ${report.paper === p ? 'selected' : ''}>${p}</option>`).join('')}</select>
     <select data-rep="orient"><option value="landscape" ${report.orient === 'landscape' ? 'selected' : ''}>${T('Landscape')}</option><option value="portrait" ${report.orient === 'portrait' ? 'selected' : ''}>${T('Portrait')}</option></select>
     <button class="btn primary" data-act="rep-print">${ic('dl')}${T('Print / save as PDF')}</button>
+    <button class="btn" data-act="rep-layout" title="${T('Header, footer, margins and paper')}">${T('Page layout…')}</button>
     <span class="mut">${T('Tip: pick “Save as PDF” as the printer to share it.')}</span>
     <button class="btn" style="margin-left:auto" data-act="rep-close">${T('Close')}</button></div>
     <div class="paper ${report.orient}">${body}</div>`;
@@ -99,12 +100,17 @@ function costByDay(useBaseline) {
   }
   return out;
 }
+// Report chart colors for each style (reports are on white paper, whatever the mode).
+const CHART_COLORS = { modern: ['#3b7cff', '#16834f', '#c62839', '#999'], corporate: ['#2f6db5', '#2e7d4f', '#c0392b', '#8a9bb0'], classic: ['#4472c4', '#70ad47', '#c00000', '#a5a5a5'], executive: ['#566573', '#4d7c6a', '#a93226', '#aab4be'], mono: ['#111', '#111', '#111', '#888'] };
+const chartColor = k => (CHART_COLORS[document.documentElement.dataset.style] || CHART_COLORS.modern)[k];
+// In black & white the lines are told apart by their dash pattern instead.
+const chartDash = k => document.documentElement.dataset.style === 'mono' ? ['', '7 4', '2 3', '4 4'][k] : '';
 function lineChart(series, labels, fmt) {
   const W = 760, H = 220, P = 40, max = Math.max(1, ...series.flatMap(s => s.values.filter(v => v != null)));
   const x = k => P + k * (W - P - 10) / Math.max(1, labels.length - 1), y = v => H - 24 - v / max * (H - 40);
-  const lines = series.map(s => `<polyline fill="none" stroke="${s.color}" stroke-width="2.5" ${s.dash ? 'stroke-dasharray="6 4"' : ''} points="${s.values.map((v, k) => v == null ? '' : `${x(k)},${y(v)}`).join(' ')}"/>`).join('');
+  const lines = series.map(s => `<polyline fill="none" stroke="${s.color}" stroke-width="2.5" ${s.dash ? `stroke-dasharray="${s.dash === 1 ? '6 4' : s.dash}"` : ''} points="${s.values.map((v, k) => v == null ? '' : `${x(k)},${y(v)}`).join(' ')}"/>`).join('');
   const ticks = labels.map((l, k) => k % Math.ceil(labels.length / 10) ? '' : `<text x="${x(k)}" y="${H - 6}" font-size="10" text-anchor="middle" fill="#666">${esc(l)}</text>`).join('');
-  const legend = series.map((s, k) => `<rect x="${P + k * 170}" y="4" width="12" height="4" fill="${s.color}"/><text x="${P + 18 + k * 170}" y="10" font-size="11" fill="#333">${esc(s.name)}</text>`).join('');
+  const legend = series.map((s, k) => `<line x1="${P + k * 170}" x2="${P + k * 170 + 14}" y1="6" y2="6" stroke="${s.color}" stroke-width="3" ${s.dash ? `stroke-dasharray="${s.dash === 1 ? '6 4' : s.dash}"` : ''}/><text x="${P + 18 + k * 170}" y="10" font-size="11" fill="#333">${esc(s.name)}</text>`).join('');
   const grid = [0, 0.25, 0.5, 0.75, 1].map(f => `<line x1="${P}" x2="${W - 10}" y1="${y(max * f)}" y2="${y(max * f)}" stroke="#eee"/><text x="${P - 4}" y="${y(max * f) + 3}" font-size="9" text-anchor="end" fill="#888">${esc(fmt(max * f))}</text>`).join('');
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px">${grid}${lines}${ticks}${legend}</svg>`;
 }
@@ -115,8 +121,8 @@ function repCash() {
   const cur = sum(costByDay(false)), hasBase = D.tasks.some(t => t.baselines.some(b => b.n === 0 && b.cost));
   const base = hasBase ? sum(costByDay(true)) : null;
   const cum = arr => { let s = 0; return arr.map(v => s += v); };
-  const series = [{ name: T('Planned (cumulative)'), color: '#3b7cff', values: cum(cur) }];
-  if (base) series.push({ name: T('Baseline (cumulative)'), color: '#999', dash: 1, values: cum(base) });
+  const series = [{ name: T('Planned (cumulative)'), color: chartColor(0), values: cum(cur) }];
+  if (base) series.push({ name: T('Baseline (cumulative)'), color: chartColor(3), dash: 1, values: cum(base) });
   return head(T('Cash flow')) + (usage ? '' : `<p class="sub">${T('Loading…')}</p>`) + lineChart(series, ps.map(lab), money) +
     `<table><tr><th>${unit === 'month' ? T('Month') : T('Week of')}</th><th class="n">${T('Cost')}</th><th class="n">${T('Cumulative')}</th>${base ? `<th class="n">${T('Baseline')}</th><th class="n">${T('Baseline cumulative')}</th>` : ''}</tr>
     ${ps.map((p, k) => `<tr><td>${esc(lab(p))}</td><td class="n">${money(cur[k])}</td><td class="n">${money(series[0].values[k])}</td>${base ? `<td class="n">${money(base[k])}</td><td class="n">${money(series[1].values[k])}</td>` : ''}</tr>`).join('')}
@@ -133,7 +139,7 @@ function repEv() {
   const k = ps.findIndex(([a, b]) => st >= a && st < b);
   const evS = ps.map((p, j) => j === k ? e.ev : j < k ? null : null), acS = ps.map((p, j) => j === k ? e.ac : null);
   if (k > 0) { evS[0] = 0; acS[0] = 0; for (let j = 1; j < k; j++) { evS[j] = e.ev * j / k; acS[j] = e.ac * j / k; } }
-  const chart = lineChart([{ name: T('Planned value (PV)'), color: '#3b7cff', values: pv }, { name: T('Earned value (EV)'), color: '#16834f', values: evS }, { name: T('Actual cost (AC)'), color: '#c62839', values: acS }], ps.map(lab), money);
+  const chart = lineChart([{ name: T('Planned value (PV)'), color: chartColor(0), dash: chartDash(0), values: pv }, { name: T('Earned value (EV)'), color: chartColor(1), dash: chartDash(1), values: evS }, { name: T('Actual cost (AC)'), color: chartColor(2), dash: chartDash(2), values: acS }], ps.map(lab), money);
   const rows = D.tasks.filter(t => !t.inactive && (t.bac || t.summary)).map(t => {
     const sv = t.ev - t.pv, cv = t.ev - t.acv;
     return `<tr><td>${t.wbs}</td><td>${t.summary ? '<b>' : ''}${'&nbsp;'.repeat(t.level * 3)}${esc(t.name)}${t.summary ? '</b>' : ''}</td><td class="n">${money(t.bac)}</td><td class="n">${money(t.pv)}</td><td class="n">${money(t.ev)}</td><td class="n">${money(t.acv)}</td><td class="n ${sv < 0 ? 'bad' : ''}">${money(sv)}</td><td class="n ${cv < 0 ? 'bad' : ''}">${money(cv)}</td><td class="n">${t.pv ? (t.ev / t.pv).toFixed(2) : '—'}</td><td class="n">${t.acv ? (t.ev / t.acv).toFixed(2) : '—'}</td></tr>`;

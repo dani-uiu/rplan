@@ -1,0 +1,28 @@
+# A trimmed copy of webview2-com-sys 0.39.1 (MIT, https://github.com/wravery/webview2-rs).
+# The only change: WebView2Loader.dll's five functions are looked up when first
+# called instead of linked at build time, so rplan starts (and its command line
+# works) without the DLL. rplan unpacks the DLL right before opening its window.
+[package]
+edition = "2021"
+name = "webview2-com-sys"
+version = "0.39.1"
+license = "MIT"
+description = "Bindings generated with the windows crate for the WebView2 COM APIs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+windows-core = "0.62"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_System_WinRT",
+    "Win32_UI_WindowsAndMessaging",
+]

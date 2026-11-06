@@ -21,7 +21,7 @@
   <nav class="tabs" id="tabs"></nav>
   <button class="btn icon" id="lang" data-act="lang" title="Español / English">ES</button>
   <button class="btn icon" id="help" data-act="help" title="?">?</button>
-  <button class="btn icon" id="theme" data-act="theme"><svg class="i" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg></button>
+  <button class="btn icon" id="theme" data-menu="look" title="Look"><svg class="i" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg></button>
 </header>
 <section class="toolbar" id="toolbar"></section>
 <section class="kpis" id="kpis"></section>
@@ -33,6 +33,7 @@
   <span id="fpath"></span>
   <span class="saved" id="saved" style="opacity:0"></span>
   <span class="r hide-m" id="hints"></span>
+  <span class="zoomctl" title="App zoom (Ctrl + / Ctrl − / Ctrl 0)"><button data-act="uiz-out" aria-label="Zoom out">−</button><button id="uiz" data-menu="uizoom">100%</button><button data-act="uiz-in" aria-label="Zoom in">+</button></span>
 </footer>
 <dialog id="dlg"></dialog>
 <div id="report" hidden></div>
@@ -46,6 +47,7 @@
 <script src="/ui/views.js"></script>
 <script src="/ui/panels.js"></script>
 <script src="/ui/reports.js"></script>
+<script src="/ui/print.js"></script>
 <script src="/ui/events.js"></script>
 </body>
 </html>

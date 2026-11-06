@@ -25,7 +25,7 @@ use std::{fs, thread};
 
 const UI: &str = include_str!("ui/index.html");
 /// The interface's scripts and styles, built into the program.
-const ASSETS: [(&str, &str, &str); 8] = [
+const ASSETS: [(&str, &str, &str); 9] = [
     ("/ui/style.css", "text/css; charset=utf-8", include_str!("ui/style.css")),
     ("/ui/i18n.js", "text/javascript; charset=utf-8", include_str!("ui/i18n.js")),
     ("/ui/core.js", "text/javascript; charset=utf-8", include_str!("ui/core.js")),
@@ -33,6 +33,7 @@ const ASSETS: [(&str, &str, &str); 8] = [
     ("/ui/views.js", "text/javascript; charset=utf-8", include_str!("ui/views.js")),
     ("/ui/panels.js", "text/javascript; charset=utf-8", include_str!("ui/panels.js")),
     ("/ui/reports.js", "text/javascript; charset=utf-8", include_str!("ui/reports.js")),
+    ("/ui/print.js", "text/javascript; charset=utf-8", include_str!("ui/print.js")),
     ("/ui/events.js", "text/javascript; charset=utf-8", include_str!("ui/events.js")),
 ];
 
@@ -766,7 +767,7 @@ fn write_resp(mut st: &TcpStream, r: Resp) {
     let _ = st.flush();
 }
 
-fn open_browser(url: &str) {
+pub fn open_browser(url: &str) {
     #[cfg(windows)]
     let _ = std::process::Command::new("explorer.exe").arg(url).spawn();
     #[cfg(target_os = "macos")]
@@ -861,12 +862,30 @@ pub fn serve(path: &str, port: u16, launch: Launch) -> Result<(), String> {
         Launch::None => {}
         Launch::Browser => open_browser(&url),
         Launch::Window => {
-            if open_window(&url, Arc::clone(&ctx)) {
+            #[cfg(any(windows, target_os = "macos"))]
+            {
+                let accept = Arc::clone(&ctx);
+                thread::spawn(move || accept_loop(listener, accept));
+                let title = format!("{} — rplan", Path::new(path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
                 #[cfg(windows)]
                 hide_own_console();
+                let err = crate::window::run(&url, &title, || std::process::exit(0)).err().unwrap_or_default();
+                // No usable web view (e.g. WebView2 missing): use a browser window instead.
+                let _ = writeln!(std::io::stderr(), "rplan: the app window could not start ({err}); using a browser window");
+                open_window(&url, Arc::clone(&ctx));
+                loop {
+                    thread::park();
+                }
             }
+            #[cfg(not(any(windows, target_os = "macos")))]
+            open_window(&url, Arc::clone(&ctx));
         }
     }
+    accept_loop(listener, ctx);
+    Ok(())
+}
+
+fn accept_loop(listener: TcpListener, ctx: Arc<Ctx>) {
     for st in listener.incoming().flatten() {
         let ctx = Arc::clone(&ctx);
         thread::spawn(move || {
@@ -879,7 +898,6 @@ pub fn serve(path: &str, port: u16, launch: Launch) -> Result<(), String> {
             write_resp(&st, resp);
         });
     }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -105,7 +105,7 @@ function rowsModel() {
 const X = m => (m / 1440 + PAD) * dw;
 function spanDays(gw) {
   const last = Math.max(D.finish, ...D.tasks.map(t => Math.max(t.lf, t.baselines.reduce((a, b) => Math.max(a, b.f), 0), t.deadline != null ? (t.deadline + 1) * 1440 : 0)), D.status != null ? (D.status + 2) * 1440 : 0);
-  return Math.max(Math.ceil(last / 1440) + Math.ceil(40 / Math.max(dw, 0.5)), Math.ceil((innerWidth - gw - inspW()) / dw) - PAD);
+  return Math.max(Math.ceil(last / 1440) + Math.ceil(40 / Math.max(dw, 0.5)), Math.ceil((vw() - gw - inspW()) / dw) - PAD);
 }
 function unitStart(unit, d) {
   const x = dateOf(d), y = x.getUTCFullYear(), m = x.getUTCMonth();

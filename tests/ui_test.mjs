@@ -544,6 +544,49 @@ await test('stale writes are refused instead of overwriting newer changes', asyn
 });
 
 await shot('07-final');
+await test('chart styles change the look of bars, WBS boxes and reports', async () => {
+  await js('setView("gantt")');
+  const look = () => js(`(() => { const b = getComputedStyle(document.querySelector('.bar:not(.c)')); return b.backgroundImage + '|' + b.backgroundColor + '|' + b.borderRadius + '|' + b.height; })()`);
+  const seen = new Set();
+  for (const s of ['modern', 'corporate', 'classic', 'executive', 'mono']) {
+    await js('document.querySelector("#theme").click()');
+    ok(await js('!!document.querySelector("#menu [data-act=\'style:' + s + '\']")'), 'style menu lists ' + s);
+    await js(`document.querySelector("#menu [data-act='style:${s}']").click()`);
+    ok(await js('document.documentElement.dataset.style || "modern"') === s, 'style applied: ' + s);
+    seen.add(await look());
+    await shot('style-' + s);
+  }
+  ok(seen.size === 5, 'each style draws bars differently: ' + [...seen].join(' / '));
+  await js('setView("wbs")'); await shot('style-mono-wbs');
+  ok(await js('getComputedStyle(document.querySelector(".wnode")).borderRadius') === '0px', 'square WBS boxes in black & white');
+  await js('act("style:modern")');
+  ok(await js('localStorage.getItem("rplan.style")') === 'modern' && !(await js('document.documentElement.dataset.style')), 'back to modern');
+  await js('setView("gantt")');
+});
+
+await test('app zoom scales the interface; dragging still lands on the right day', async () => {
+  await js('setView("gantt")');
+  const w0 = await js('document.querySelector(".top").getBoundingClientRect().height');
+  await key('=', 'Equal', 187, 2); // Ctrl+=
+  ok(await js('uiZ') === 1.1, 'Ctrl+= zooms to 110%: ' + await js('uiZ'));
+  await js('setUiZoom(1.5)');
+  ok(await js('document.querySelector("#uiz").textContent') === '150%', 'status bar shows 150%');
+  const w1 = await js('document.querySelector(".top").getBoundingClientRect().height');
+  ok(Math.abs(w1 / w0 - 1.5) < 0.05, `top bar 1.5× taller (${w0} → ${w1})`);
+  ok(await js('localStorage.getItem("rplan.uiz")') === '1.5', 'zoom remembered');
+  await shot('zoom-150');
+  // Resize a bar by 2 days at 150%: the mouse moves 1.5× as many screen pixels.
+  const id = await js('+[...document.querySelectorAll(".bar[data-bar]")].find(b => !b.classList.contains("done") && b.querySelector(".hr")).dataset.bar');
+  const r = await rect(`[data-bar="${id}"]`), dw = await js('dw');
+  const before = await js(`Math.round(task(${id}).edur / dmin())`);
+  await dragMouse(r.x + r.w - 2, r.y + r.h / 2, r.x + r.w - 2 + dw * 2 * 1.5, r.y + r.h / 2);
+  await settle();
+  const after = await js(`Math.round(task(${id}).edur / dmin())`);
+  ok(after - before >= 1 && after - before <= 3, `resize at 150% added ~2 days (${before}d → ${after}d)`);
+  await key('0', 'Digit0', 48, 2); // Ctrl+0
+  ok(await js('uiZ') === 1 && await js('document.documentElement.style.zoom') === '', 'Ctrl+0 resets to 100%');
+});
+
 await test('no JavaScript errors were thrown on the page', async () => {
   ok(!pageErrors.length, pageErrors.slice(0, 5).join('\n      '));
 });

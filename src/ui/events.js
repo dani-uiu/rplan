@@ -160,7 +160,11 @@ async function act(a, el) {
     case 'calendar': openDialog('calendar'); break;
     case 'dlg-close': $('#dlg').close(); dlgKind = null; break;
     case 'lang': LANG = LANG === 'es' ? 'en' : 'es'; store('lang', LANG); setupFormats(); render(); if (!$('#report').hidden) renderReport(); break;
-    case 'theme': { const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; applyTheme(t); store('theme', t); break; }
+    case 'theme': { const t = arg || (document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'); applyTheme(t); store('theme', t); render(); if (!$('#report').hidden) renderReport(); break; }
+    case 'style': applyStyle(arg); store('style', arg); render(); if (!$('#report').hidden) renderReport(); break;
+    case 'uiz': setUiZoom(+arg); break;
+    case 'uiz-in': uiZoomStep(1); break;
+    case 'uiz-out': uiZoomStep(-1); break;
     case 'status-today': commit(m => { m.status = todayOff(); }, T('Status date set to today')); break;
     case 'indent': indentSel(1); break;
     case 'outdent': indentSel(-1); break;
@@ -177,7 +181,8 @@ async function act(a, el) {
     case 'exp-xml': location.href = '/api/export.xml?token=' + TOKEN; break;
     case 'exp-html': location.href = '/api/export.html?token=' + TOKEN; break;
     case 'exp-plan': location.href = '/api/export.plan?token=' + TOKEN; break;
-    case 'print': closeReport(); if (view !== 'gantt') setView('gantt'); setTimeout(() => print(), 50); break;
+    case 'print': openPrint(['gantt', 'wbs', 'network', 'usage', 'resources'].includes(view) ? view : 'gantt'); break;
+    case 'rep-layout': openPrint('report'); break;
     case 'reports': openReport(); break;
     case 'report': openReport(el.dataset.r); break;
     case 'rep-print': printReport(); break;
@@ -438,6 +443,11 @@ document.addEventListener('keydown', e => {
   const el = e.target, inInput = el.matches && el.matches('input,select,textarea'), k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
   if (e.key === 'Escape' && $('#menu')) { closeMenu(); return; }
   if (e.key === 'Escape' && !$('#report').hidden) { closeReport(); return; }
+  if (mod && !e.altKey && (k === '+' || k === '=' || k === '-' || k === '0' || e.code === 'NumpadAdd' || e.code === 'NumpadSubtract' || e.code === 'Numpad0')) {
+    e.preventDefault(); uiZoomStep(k === '0' || e.code === 'Numpad0' ? 0 : k === '-' || e.code === 'NumpadSubtract' ? -1 : 1); return;
+  }
+  if (printOpen()) { if (e.key === 'Escape') closePrint(); if (mod && k === 'p') { e.preventDefault(); psPrint(); } return; }
+  if (mod && k === 'p' && !e.shiftKey) { e.preventDefault(); act('print'); return; }
   if (mod && k === 'o') { e.preventDefault(); act('open'); return; }
   if (mod && k === 'f') { e.preventDefault(); if (view !== 'gantt') setView('gantt'); $('#q')?.focus(); $('#q')?.select(); return; }
   if ($('#dlg').open) { if (e.key === 'Enter' && el.id === 'new-file-name') act('create-file'); return; }
@@ -519,22 +529,22 @@ document.addEventListener('mousedown', e => {
     e.preventDefault();
     const svg = $('#links'), box = svg.getBoundingClientRect(), src = l.parentElement.getBoundingClientRect();
     const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('class', 'tmp'); svg.appendChild(p);
-    drag = { kind: 'link', id: +l.dataset.link, path: p, box, sx: src.right - box.left, sy: src.top + src.height / 2 - box.top }; document.body.style.cursor = 'crosshair';
+    drag = { kind: 'link', id: +l.dataset.link, path: p, box, sx: (src.right - box.left) / Z(), sy: (src.top + src.height / 2 - box.top) / Z() }; document.body.style.cursor = 'crosshair';
   } else { drag = { kind: 'move', id: +mv.dataset.move, bar: mv, x0: e.clientX, l0: mv.offsetLeft, moved: false }; }
 });
 document.addEventListener('mousemove', e => {
   if (!drag) return moveTip(e);
   const t = task(drag.id);
   if (drag.kind === 'resize') {
-    const w = Math.max(dw * 0.5, drag.w0 + e.clientX - drag.x0); drag.bar.style.width = w + 'px';
+    const w = Math.max(dw * 0.5, drag.w0 + (e.clientX - drag.x0) / Z()); drag.bar.style.width = w + 'px';
     const endDay = Math.floor((drag.bar.offsetLeft + w - 1) / dw - PAD);
     drag.dur = t.elapsed ? Math.max(1, endDay - sDay(t) + 1) * 1440 : Math.max(1, workDays(sDay(t), endDay)) * dmin();
     showTip(e, `<h5>${esc(t.name)}</h5><b>${fmtDur(drag.dur, t.elapsed)}</b> → ${T('ends {0}', nice(Math.max(endDay, sDay(t))))}`);
   } else if (drag.kind === 'link') {
-    const x = e.clientX - drag.box.left, y = e.clientY - drag.box.top;
+    const x = (e.clientX - drag.box.left) / Z(), y = (e.clientY - drag.box.top) / Z();
     drag.path.setAttribute('d', `M${drag.sx},${drag.sy} C${drag.sx + 60},${drag.sy} ${x - 60},${y} ${x},${y}`);
   } else {
-    const dx = e.clientX - drag.x0; if (!drag.moved && Math.abs(dx) < 4) return;
+    const dx = (e.clientX - drag.x0) / Z(); if (!drag.moved && Math.abs(dx) * Z() < 4) return;
     drag.moved = true; drag.bar.classList.add('dragging'); drag.bar.style.left = drag.l0 + dx + 'px';
     drag.day = t.edur === 0 ? Math.floor((drag.l0 + dx + 8) / dw - PAD) : Math.round((drag.l0 + dx) / dw - PAD);
     showTip(e, `<h5>${esc(t.name)}</h5>${T('Start no earlier than')} <b>${nice(drag.day)}</b>`);
@@ -585,11 +595,24 @@ document.addEventListener('mouseleave', hideTip);
 
 /* ---------- start-up ---------- */
 applyTheme(store('theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+applyStyle(store('style'));
+applyUiZoom();
 // A late 'close' event must not reset a dialog that was opened again in the meantime.
 $('#dlg').addEventListener('close', () => { if (!$('#dlg').open) dlgKind = null; });
-document.addEventListener('wheel', e => { if (e.ctrlKey && view !== 'network' && view !== 'wbs') { e.preventDefault(); zoom(e.deltaY < 0 ? 1.1 : 0.9); } }, { passive: false });
+document.addEventListener('wheel', e => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  const timeline = !e.shiftKey && (view === 'gantt' || view === 'usage') && e.target.closest?.('.view') && !e.target.closest('.gridl,.corner');
+  if (timeline) zoom(e.deltaY < 0 ? 1.1 : 0.9);
+  else { clearTimeout(wheelZ); wheelZ = setTimeout(() => uiZoomStep(e.deltaY < 0 ? 1 : -1), 40); }
+}, { passive: false });
+let wheelZ;
 let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(render, 150); });
-addEventListener('beforeprint', () => { if ($('#report').hidden && view !== 'gantt') { view = 'gantt'; render(); } });
+addEventListener('beforeprint', () => {
+  document.documentElement.style.zoom = ''; document.documentElement.style.setProperty('--zf', 1);
+  if ($('#report').hidden && !printOpen() && view !== 'gantt') { view = 'gantt'; render(); }
+});
+addEventListener('afterprint', applyUiZoom);
 // Tell rplan the window is still open (it quits a while after the last window closes).
 setInterval(() => { fetch('/api/ping', { headers: { 'X-Rplan-Token': TOKEN } }).catch(() => {}); }, 15000);
 // Live reload when the .plan file changes elsewhere (text editor, CLI, git pull…).

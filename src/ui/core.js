@@ -411,6 +411,7 @@ function render() {
   if (view === 'gantt') ganttMounted();
   inspector(); $('#insp').scrollTop = iscroll;
   if (dlgKind && $('#dlg').open) renderDialog();
+  if (typeof printOpen === 'function' && printOpen()) renderPreview();
   if (fsel && sameTask) {
     const el = document.querySelector(fsel);
     if (el && el !== document.activeElement) {
@@ -509,13 +510,16 @@ function menuItems(name) {
   const people = D.resources.filter(r => r.kind === 'work').map(r => r.name);
   const tick = (cur, v) => cur === v ? 'on' : '';
   const m = {
+    look: [['h', T('Chart style')], ...STYLES.map(([v, l, d]) => [`style:${v}`, l(), d(), tick(store('style') || 'modern', v)]), ['-'], ['h', T('Mode')],
+      ['theme:dark', T('Dark'), '', tick(document.documentElement.dataset.theme, 'dark')], ['theme:light', T('Light'), '', tick(document.documentElement.dataset.theme, 'light')]],
+    uizoom: [['h', T('App zoom')], ...UI_ZOOMS.map(z => [`uiz:${z}`, Math.round(z * 100) + '%', z === 1 ? 'Ctrl+0' : '', Math.abs(uiZ - z) < 0.001 ? 'on' : ''])],
     level: [['level', T('Level resources'), T('delay clashing tasks')], ['unlevel', T('Clear leveling')], ['-'], ['go-people', T('Show workloads')]],
     baseline: [...Array(11).keys()].flatMap(n => {
       const has = D.tasks.some(t => t.baselines.some(b => b.n === n));
       if (n > 3 && !has) return [];
       return [[`baseline:${n}`, n ? T('Save baseline {0}', n) : T('Save baseline'), has ? T('saved') : ''], ...(has ? [[`baseline-clear:${n}`, n ? T('Clear baseline {0}', n) : T('Clear baseline')]] : [])];
     }),
-    export: [['exp-xml', T('ProjectLibre / MS Project (.xml)')], ['exp-html', T('Shareable Gantt (.html)')], ['exp-plan', T('Plan file (.plan)')], ['-'], ['print', T('Print / save as PDF'), 'Ctrl+P'], ['reports', T('Printable reports…')]],
+    export: [['exp-xml', T('ProjectLibre / MS Project (.xml)')], ['exp-html', T('Shareable Gantt (.html)')], ['exp-plan', T('Plan file (.plan)')], ['-'], ['print', T('Print / save as PDF…'), 'Ctrl+P'], ['reports', T('Printable reports…')]],
     project: [['open', T('Open or create a project…'), 'Ctrl+O'], ['history', T('Version history…')], ['-'], ['recurring', T('Add a recurring task…')], ['-'], ['new-project', T('Clear this project'), T('keeps your calendar')], ['sample', T('Load the sample project')], ['-'], ['import', T('Import ProjectLibre / MS Project…'), '.xml']],
     filter: [['h', T('Show')], ...[['all', T('All tasks')], ['critical', T('Critical')], ['late', T('Past deadline')], ['behind', T('Behind schedule')], ['notstarted', T('Not started')], ['inprogress', T('In progress')], ['done', T('Completed')], ['milestones', T('Milestones')], ['summaries', T('Summary tasks')], ['unassigned', T('Unassigned')], ['inactive', T('Inactive')]].map(([v, l]) => [`filter:${v}`, l, '', tick(filter, v)]),
       ...(people.length ? [['h', T('Assigned to')], ...people.map(p => [`filter:person:${p}`, p, '', tick(filter, 'person:' + p)])] : [])],
@@ -538,9 +542,11 @@ function openMenu(name, btn) {
     el.innerHTML = menuItems(name).map(([a, l, k, on]) => a === '-' ? '<hr>' : a === 'h' ? `<div class="mh">${l}</div>` : `<button data-act="${esc(a)}" class="${on || ''}">${esc(l)}<small>${esc(k || '')}</small></button>`).join('');
   }
   document.body.appendChild(el);
-  const r = btn.getBoundingClientRect();
-  el.style.top = r.bottom + 4 + 'px';
-  el.style.left = Math.max(8, Math.min(r.left, innerWidth - el.offsetWidth - 8)) + 'px';
+  const r = btn.getBoundingClientRect(), z = Z();
+  el.style.top = r.bottom / z + 4 + 'px';
+  el.style.left = Math.max(8, Math.min(r.left / z, vw() - el.offsetWidth - 8)) + 'px';
+  // Open upwards when there's no room below (e.g. the zoom menu in the status bar).
+  if (r.bottom / z + 4 + el.offsetHeight > vh()) el.style.top = Math.max(8, r.top / z - el.offsetHeight - 4) + 'px';
 }
 function closeMenu() { $('#menu')?.remove(); }
 
@@ -552,15 +558,43 @@ function toast(msg, kind) {
 }
 let savedT; function saved() { const s = $('#saved'); s.style.opacity = 1; clearTimeout(savedT); savedT = setTimeout(() => s.style.opacity = 0, 1600); }
 const tip = () => $('#tip');
-function showTip(e, html) { const t = tip(); t.innerHTML = html; t.style.display = 'block'; const r = t.getBoundingClientRect(); t.style.left = Math.min(e.clientX + 16, innerWidth - r.width - 10) + 'px'; t.style.top = Math.min(e.clientY + 16, innerHeight - r.height - 10) + 'px'; }
+function showTip(e, html) { const t = tip(), z = Z(); t.innerHTML = html; t.style.display = 'block'; t.style.left = Math.min(e.clientX / z + 16, vw() - t.offsetWidth - 10) + 'px'; t.style.top = Math.min(e.clientY / z + 16, vh() - t.offsetHeight - 10) + 'px'; }
 function hideTip() { tip().style.display = 'none'; }
 function applyTheme(t) { document.documentElement.dataset.theme = t; }
+function applyStyle(s) { if (s && s !== 'modern') document.documentElement.dataset.style = s; else delete document.documentElement.dataset.style; }
+/* App zoom: scales the whole interface (the time scale has its own zoom).
+   Mouse positions and getBoundingClientRect() are in screen pixels, layout values in
+   page pixels: divide by Z() to go from one to the other. */
+const STYLES = [
+  ['modern', () => T('Modern'), () => T('default')],
+  ['corporate', () => T('Corporate'), () => T('navy, flat')],
+  ['classic', () => T('Classic'), () => T('like MS Project')],
+  ['executive', () => T('Executive'), () => T('graphite, minimal')],
+  ['mono', () => T('Black & white'), () => T('for printing')],
+];
+const UI_ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5];
+let uiZ = Math.max(0.5, Math.min(2.5, +store('uiz') || 1));
+const Z = () => uiZ;
+const vw = () => document.documentElement.clientWidth, vh = () => document.documentElement.clientHeight;
+function applyUiZoom() {
+  const r = document.documentElement;
+  r.style.zoom = uiZ === 1 ? '' : uiZ; r.style.setProperty('--zf', uiZ);
+  const z = $('#uiz'); if (z) z.textContent = Math.round(uiZ * 100) + '%';
+}
+function setUiZoom(z) {
+  uiZ = Math.round(Math.max(0.5, Math.min(2.5, z)) * 100) / 100; store('uiz', uiZ);
+  applyUiZoom(); closeMenu(); hideTip(); render();
+}
+function uiZoomStep(dir) {
+  const next = dir > 0 ? UI_ZOOMS.find(z => z > uiZ + 0.001) : [...UI_ZOOMS].reverse().find(z => z < uiZ - 0.001);
+  setUiZoom(dir === 0 ? 1 : next ?? uiZ);
+}
 function setView(v) { view = v; store('view', v); history.replaceState(null, '', '#' + v); if (v === 'usage' && !usage) loadUsage(); render(); }
 async function loadUsage() { const j = await api('GET', '/api/usage'); if (j.ok) { usage = j; if (view === 'usage') render(); } }
 function zoom(f) { dw = Math.max(0.2, Math.min(80, dw * f)); store('dw', dw); render(); }
 function fit() {
   const GW = view === 'resources' ? 700 : view === 'usage' ? 0 : colsDef().reduce((a, c) => a + c[2], 0);
   const days = Math.max(Math.ceil(D.finish / 1440) + 4, 10);
-  dw = Math.max(0.2, Math.min(60, (innerWidth - GW - inspW() - 30) / (days + PAD)));
+  dw = Math.max(0.2, Math.min(60, (vw() - GW - inspW() - 30) / (days + PAD)));
   store('dw', dw); render();
 }

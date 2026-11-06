@@ -16,6 +16,8 @@ mod mspdi;
 mod report;
 mod schedule;
 mod server;
+#[cfg(any(windows, target_os = "macos"))]
+mod window;
 
 use calendar::*;
 use model::*;
