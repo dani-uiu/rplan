@@ -151,6 +151,18 @@ fn subtree_end(p: &Project, i: usize) -> usize {
     j
 }
 
+/// Today's date (UTC) as a day number.
+pub fn today() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64 / 86_400).unwrap_or(0)
+}
+
+/// An empty project named after its file (`My Project.plan` → "My Project"), starting today.
+pub fn blank_project(path: &str) -> Project {
+    let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("New project");
+    let name = clean(stem);
+    Project { name: if name.is_empty() { "New project".into() } else { name }, start: today(), ..Default::default() }
+}
+
 fn ok(msg: &str) {
     out(&format!("{GRN}✓ {msg}{RST}\n"));
 }
@@ -163,8 +175,8 @@ fn run() -> Result<(), String> {
         "ui" => {
             need(2)?;
             if fs::metadata(&a[1]).is_err() {
-                fs::write(&a[1], Project::parse(DEMO)?.serialize()).map_err(|e| e.to_string())?;
-                ok(&format!("{} didn't exist — created it from the sample project", a[1]));
+                save(&a[1], &blank_project(&a[1]))?;
+                ok(&format!("Created a new, empty project in {}", a[1]));
             }
             let port = flag(&a, "--port").and_then(|v| v.parse().ok()).unwrap_or(7878);
             server::serve(&a[1], port, !a.iter().any(|x| x == "--no-open"))?;

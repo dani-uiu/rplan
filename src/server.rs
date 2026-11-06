@@ -344,6 +344,19 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
             clear_baseline(p);
             Ok("Baseline cleared".into())
         }),
+        ("POST", "/api/new") => mutate(&|p| {
+            // Start fresh but keep the working week, hours per day and currency.
+            let mut b = crate::blank_project(path);
+            b.week = p.week.clone();
+            b.day_minutes = p.day_minutes;
+            b.currency = p.currency.clone();
+            *p = b;
+            Ok("Started a new, empty project — Ctrl+Z brings the old one back".into())
+        }),
+        ("POST", "/api/sample") => mutate(&|p| {
+            *p = Project::parse(crate::DEMO)?;
+            Ok("Loaded the sample project — Ctrl+Z brings yours back".into())
+        }),
         ("GET", "/api/export.html") => match load(path).and_then(|p| report::html(&p).map(|h| (p, h))) {
             Ok((p, h)) => Resp::download("text/html; charset=utf-8", &format!("{}.html", p.name), h),
             Err(e) => Resp::err(400, &e),
@@ -503,6 +516,21 @@ mod tests {
         assert_eq!(route(&req("GET", "/api/export.xml?token=secret", &[OK], ""), &c).code, 200);
         assert_eq!(route(&req("POST", "/api/level", &[OK, TOK], ""), &c).code, 200);
         assert!(fs::read_to_string(&c.path).unwrap().contains("delay="));
+    }
+
+    #[test]
+    fn new_blank_project_and_sample() {
+        let c = ctx();
+        fs::write(&c.path, "project X\nstart 2026-11-09\nweek Sat 09:00-13:00\ndayhours 7\ntask 1 | A | 1d").unwrap();
+        assert_eq!(route(&req("POST", "/api/new", &[OK, TOK], ""), &c).code, 200);
+        let p = Project::parse(&fs::read_to_string(&c.path).unwrap()).unwrap();
+        assert!(p.tasks.is_empty());
+        assert_eq!(p.name, "t", "named after the file");
+        assert_eq!(p.start, crate::today());
+        assert_eq!((p.week[6].clone(), p.day_minutes), (vec![(540, 780)], 420), "keeps the calendar");
+        assert_eq!(route(&req("POST", "/api/sample", &[OK, TOK], ""), &c).code, 200);
+        assert!(fs::read_to_string(&c.path).unwrap().contains("Website Launch"));
+        assert_eq!(crate::blank_project("C:/x/My Project.plan").name, "My Project");
     }
 
     #[test]

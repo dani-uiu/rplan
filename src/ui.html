@@ -115,6 +115,10 @@ main{flex:1;min-width:0;position:relative;overflow:hidden}
 .row.add input{color:var(--mut)}
 .row.add input::placeholder{color:var(--dim)}
 .empty{padding:28px;color:var(--mut);text-align:center}
+.welcome{position:absolute;left:24px;top:24px;width:min(520px,calc(100% - 48px));background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px;box-shadow:var(--shadow)}
+.welcome h3{margin:0 0 6px;font-size:16px}
+.welcome p{margin:0 0 14px;color:var(--mut);line-height:1.5}
+.welcome .acts{display:flex;gap:8px;flex-wrap:wrap}
 
 /* timeline */
 .months,.days{display:flex;height:24px;white-space:nowrap}
@@ -632,6 +636,7 @@ function renderToolbar() {
     <button class="btn" data-menu="baseline">${ic('base')}<span class="hide-m">Baseline</span>${hasBase ? ' <span class="chip n">set</span>' : ''}<span class="caret">▾</span></button>
     <button class="btn" data-act="calendar" title="Working days, hours and holidays">${ic('cal')}<span class="hide-m">Calendar</span></button>
     <span class="grow"></span>
+    <button class="btn" data-menu="project" title="New, sample or import">${ic('plus')}<span class="hide-m">Project</span><span class="caret">▾</span></button>
     <button class="btn" data-act="import" title="Import ProjectLibre / MS Project XML">${ic('up')}<span class="hide-m">Import</span></button>
     <button class="btn" data-menu="export">${ic('dl')}<span class="hide-m">Export</span><span class="caret">▾</span></button>
     <button class="btn icon" data-act="details" title="Details panel (Enter)" style="${inspOpen ? 'color:var(--acc);border-color:var(--acc)' : ''}">${ic('side')}</button>`;
@@ -772,7 +777,9 @@ function gantt() {
   }
   const after = primary != null && task(primary) ? task(primary) : null;
   rows += `<div class="row cols add" style="--cols:${cols[0][2]}px 1fr"><div class="num">+</div><div class="nm"><input data-id="0" data-f="new" placeholder="Add a task… type a name and press Enter${after ? ` (goes after #${after.id}${after.summary ? '' : ', linked to it'})` : ''} — or paste rows from Excel"></div></div>`;
-  if (!D.tasks.length) bars += `<div class="empty" style="position:absolute;left:${X(0)}px;top:40px">No tasks yet — add one on the left, or import a ProjectLibre / MS Project file.</div>`;
+  if (!D.tasks.length) bars += `<div class="welcome"><h3>Start planning “${esc(D.name)}”</h3>
+    <p>Type your first task in the <b>Add a task…</b> row on the left and press Enter. Tasks are scheduled from <b>${nice(0)}</b>; change the start date at the top.</p>
+    <div class="acts"><button class="btn primary" data-act="add">${ic('plus')}Add the first task</button><button class="btn" data-act="import">${ic('up')}Import from ProjectLibre</button><button class="btn" data-act="calendar">${ic('cal')}Set working hours</button><button class="btn" data-act="sample">Try the sample project</button></div></div>`;
   return `<div class="view ${focusCrit ? 'dim' : ''}" data-v="gantt"><div class="gt" style="--gw:${GW}px;--cols:${tmpl};--rh:${RH}px">
     <div class="corner"><div class="cols">${cols.map(c => `<div>${c[1]}</div>`).join('')}</div></div>
     <div class="thead" style="width:${W}px">${timeHeader(days)}</div>
@@ -969,6 +976,7 @@ function openMenu(name, btn) {
   const items = {
     level: [['level', 'Level resources', 'delay clashing tasks'], ['unlevel', 'Clear leveling', ''], ['-'], ['go-people', 'Show workloads', '3']],
     baseline: [['baseline', 'Save baseline', 'snapshot dates'], ['baseline-clear', 'Clear baseline', '']],
+    project: [['new-project', 'New blank project', 'keeps your calendar'], ['sample', 'Load the sample project', ''], ['-'], ['import', 'Import ProjectLibre / MS Project…', '.xml']],
     export: [['exp-xml', 'ProjectLibre / MS Project (.xml)', ''], ['exp-html', 'Shareable Gantt (.html)', ''], ['exp-plan', 'Plan file (.plan)', ''], ['-'], ['print', 'Print / save as PDF', 'Ctrl+P']],
   }[name];
   const m = document.createElement('div');
@@ -1118,6 +1126,8 @@ async function act(a, el) {
     case 'baseline': action('/api/baseline', D.tasks.some(t => t.base) ? 'Replace the saved baseline with the current dates?' : null); break;
     case 'baseline-clear': action('/api/baseline/clear'); break;
     case 'go-people': setView('resources'); break;
+    case 'new-project': if (!D.tasks.length || confirm(`Start a new, empty project? “${D.name}” will be replaced (Ctrl+Z brings it back).`)) { sel = new Set(); primary = null; await action('/api/new'); fit(); } break;
+    case 'sample': if (!D.tasks.length || confirm(`Replace “${D.name}” with the sample project? (Ctrl+Z brings it back.)`)) { sel = new Set(); primary = null; await action('/api/sample'); fit(); } break;
     case 'import': $('#file').click(); break;
     case 'exp-xml': location.href = '/api/export.xml?token=' + TOKEN; break;
     case 'exp-html': location.href = '/api/export.html?token=' + TOKEN; break;

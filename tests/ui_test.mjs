@@ -296,6 +296,19 @@ await test('import a ProjectLibre / MS Project XML file', async () => {
   ok(file().includes('Website Launch'), 'undo import');
 });
 
+await test('Project menu: new blank project (with a welcome screen), then undo', async () => {
+  await js('document.querySelector("[data-menu=project]").click()');
+  await js('document.querySelector("#menu [data-act=new-project]").click()');
+  await waitFor(() => js('D.tasks.length === 0'), 'blank project');
+  ok(!/^\s*task /m.test(file()) && file().startsWith('project test\n'), 'file should be empty and named after it: ' + file().slice(0, 60));
+  ok(await js('!!document.querySelector(".welcome")'), 'welcome screen');
+  await shot('08-blank');
+  await js('document.querySelector(".welcome [data-act=sample]").click()');
+  await waitFor(() => js('D.name === "Website Launch"'), 'sample from the welcome screen');
+  await key('z', 'KeyZ', 90, 2); await settle(); await key('z', 'KeyZ', 90, 2); await settle();
+  ok(await js('D.tasks.length') > 5 && file().includes('Website Launch'), 'undo brings the project back');
+});
+
 await test('external edits to the .plan file reload automatically', async () => {
   fs.writeFileSync(plan, file().replace('project Website Launch', 'project Edited Elsewhere'));
   await waitFor(() => js('D.name === "Edited Elsewhere"'), 'live reload', 6000);
