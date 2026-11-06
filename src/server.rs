@@ -23,7 +23,43 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fs, thread};
 
-const UI: &str = include_str!("ui.html");
+const UI: &str = include_str!("ui/index.html");
+/// The interface's scripts and styles, built into the program.
+const ASSETS: [(&str, &str, &str); 8] = [
+    ("/ui/style.css", "text/css; charset=utf-8", include_str!("ui/style.css")),
+    ("/ui/i18n.js", "text/javascript; charset=utf-8", include_str!("ui/i18n.js")),
+    ("/ui/core.js", "text/javascript; charset=utf-8", include_str!("ui/core.js")),
+    ("/ui/gantt.js", "text/javascript; charset=utf-8", include_str!("ui/gantt.js")),
+    ("/ui/views.js", "text/javascript; charset=utf-8", include_str!("ui/views.js")),
+    ("/ui/panels.js", "text/javascript; charset=utf-8", include_str!("ui/panels.js")),
+    ("/ui/reports.js", "text/javascript; charset=utf-8", include_str!("ui/reports.js")),
+    ("/ui/events.js", "text/javascript; charset=utf-8", include_str!("ui/events.js")),
+];
+
+/// Decodes `%XX` and `+` in a URL query value.
+pub fn url_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < b.len() => {
+                match std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()).ok_or(()) {
+                    Ok(v) => {
+                        out.push(v);
+                        i += 2;
+                    }
+                    Err(_) => out.push(b'%'),
+                }
+            }
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 pub const ICON_ICO: &[u8] = include_bytes!("../assets/rplan.ico");
 pub const ICON_SVG: &[u8] = include_bytes!("../assets/rplan.svg");
 pub const ICON_PNG: &[u8] = include_bytes!("../assets/rplan.png");
@@ -520,10 +556,14 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
             let mut r = Resp::new(200, "text/html; charset=utf-8", UI.replace("__RPLAN_TOKEN__", &ctx.token));
             r.extra.push((
                 "Content-Security-Policy".into(),
-                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'".into(),
+                "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'".into(),
             ));
             r
         }
+        ("GET", a) if a.starts_with("/ui/") => match ASSETS.iter().find(|(p, _, _)| *p == a) {
+            Some((_, ctype, body)) => Resp::new(200, ctype, *body),
+            None => Resp::err(404, "not found"),
+        },
         ("GET", "/favicon.ico") => icon("image/x-icon", ICON_ICO),
         ("GET", "/favicon.svg") => icon("image/svg+xml", ICON_SVG),
         ("GET", "/apple-touch-icon.png" | "/icon.png") => icon("image/png", ICON_PNG),
@@ -562,9 +602,9 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
             if let Some(r) = stale() {
                 return r;
             }
-            let note = req.header("X-Rplan-Note").unwrap_or("Edit").to_string();
+            let note = req.param("note").map(url_decode).unwrap_or_else(|| "Edit".into());
             reply(parse_resolved(&req.body).and_then(|p| {
-                save_noted(path, &p, &note, req.header("X-Rplan-Force").is_some())?;
+                save_noted(path, &p, &note, false)?;
                 project_json(&p, path)
             }))
         }
@@ -920,6 +960,21 @@ mod tests {
         assert_eq!(route(&req("POST", "/api/open", &[OK], "t.plan"), &c).code, 403, "needs the token");
         assert_eq!(safe_file_name("CON"), "CON project");
         assert_eq!(safe_file_name("  a/b\\c.  "), "a-b-c");
+    }
+
+    #[test]
+    fn serves_ui_scripts_under_a_strict_policy() {
+        let c = ctx();
+        let page = route(&req("GET", "/", &[OK], ""), &c);
+        let csp = page.extra.iter().find(|(k, _)| k == "Content-Security-Policy").map(|(_, v)| v.clone()).unwrap();
+        assert!(csp.contains("script-src 'self'") && !csp.contains("script-src 'unsafe-inline'"), "{csp}");
+        for (path, _, _) in ASSETS {
+            let r = route(&req("GET", path, &[OK], ""), &c);
+            assert_eq!(r.code, 200, "{path}");
+            assert!(!r.body.is_empty());
+        }
+        assert_eq!(route(&req("GET", "/ui/nope.js", &[OK], ""), &c).code, 404);
+        assert_eq!(url_decode("Le%C3%B3n+%E2%80%94+ok%2"), "León — ok%2");
     }
 
     #[test]

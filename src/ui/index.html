@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="rplan-token" content="__RPLAN_TOKEN__">
+<meta name="theme-color" content="#7c5cff">
+<title>rplan</title>
+<link rel="icon" href="/favicon.ico" sizes="16x16 24x24 32x32 48x48 64x64 256x256">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/ui/style.css">
+<style id="page-setup"></style>
+</head>
+<body>
+<header class="top">
+  <div class="logo"><i><svg class="i" viewBox="0 0 24 24" style="stroke:#fff"><path d="M4 6h9M8 12h12M6 18h7"/></svg></i>rplan</div>
+  <input class="pname" id="pname" spellcheck="false">
+  <label class="field hide-m"><span data-t>Start</span> <input type="date" id="pstart"></label>
+  <label class="field hide-m"><span data-t>Status</span> <input type="date" id="pstatus"><button class="lnkbtn" data-act="status-today" data-t>today</button></label>
+  <nav class="tabs" id="tabs"></nav>
+  <button class="btn icon" id="lang" data-act="lang" title="Español / English">ES</button>
+  <button class="btn icon" id="help" data-act="help" title="?">?</button>
+  <button class="btn icon" id="theme" data-act="theme"><svg class="i" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg></button>
+</header>
+<section class="toolbar" id="toolbar"></section>
+<section class="kpis" id="kpis"></section>
+<div class="work">
+  <main id="main"></main>
+  <aside class="insp" id="insp" hidden></aside>
+</div>
+<footer class="status">
+  <span id="fpath"></span>
+  <span class="saved" id="saved" style="opacity:0"></span>
+  <span class="r hide-m" id="hints"></span>
+</footer>
+<dialog id="dlg"></dialog>
+<div id="report" hidden></div>
+<input type="file" id="file" accept=".xml,application/xml,text/xml" hidden>
+<datalist id="dl-people"></datalist>
+<div id="toasts" role="status" aria-live="polite"></div>
+<div id="tip"></div>
+<script src="/ui/i18n.js"></script>
+<script src="/ui/core.js"></script>
+<script src="/ui/gantt.js"></script>
+<script src="/ui/views.js"></script>
+<script src="/ui/panels.js"></script>
+<script src="/ui/reports.js"></script>
+<script src="/ui/events.js"></script>
+</body>
+</html>

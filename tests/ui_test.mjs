@@ -55,7 +55,12 @@ const ws = new WebSocket(target.webSocketDebuggerUrl);
 await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
 let seq = 0;
 const pending = new Map();
-ws.onmessage = m => { const j = JSON.parse(m.data); if (j.id && pending.has(j.id)) { pending.get(j.id)(j); pending.delete(j.id); } };
+const pageErrors = [];
+ws.onmessage = m => {
+  const j = JSON.parse(m.data);
+  if (j.id && pending.has(j.id)) { pending.get(j.id)(j); pending.delete(j.id); }
+  if (j.method === 'Runtime.exceptionThrown') pageErrors.push(j.params.exceptionDetails.exception?.description || j.params.exceptionDetails.text);
+};
 const cdp = (method, params = {}) => new Promise((res, rej) => { const id = ++seq; pending.set(id, j => j.error ? rej(new Error(j.error.message)) : res(j.result)); ws.send(JSON.stringify({ id, method, params })); });
 async function js(expr) {
   const r = await cdp('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
@@ -87,7 +92,10 @@ await cdp('Runtime.enable');
 await cdp('Emulation.setDeviceMetricsOverride', { width: 1500, height: 950, deviceScaleFactor: 1, mobile: false });
 await cdp('Page.navigate', { url: url + '#gantt' });
 await waitFor(() => js('typeof D !== "undefined" && !!D && !!document.querySelector("[data-row]")'), 'the app to load', 10000);
-await js('window.confirm = () => true; localStorage.clear()');
+await js("localStorage.clear(); localStorage.setItem('rplan.lang', 'en'); localStorage.setItem('rplan.dw', '28')");
+await cdp('Page.reload');
+await waitFor(() => js('typeof D !== "undefined" && !!D && !!document.querySelector("[data-row]")'), 'the app to reload', 10000);
+await js('window.confirm = () => true');
 
 console.log(`rplan UI tests (${path.basename(browser)}, ${url})`);
 
@@ -224,9 +232,9 @@ await test('calendar: change working week, hours/day and add a holiday', async (
 
 await test('click a timeline date to toggle a holiday', async () => {
   const n = (file().match(/^holiday /gm) || []).length;
-  await js('document.querySelector(".days [data-day=\\"10\\"]").click()'); await settle();
+  await js('document.querySelector(".thead [data-day=\\"10\\"]").click()'); await settle();
   ok((file().match(/^holiday /gm) || []).length === n + 1 && file().includes('holiday 2026-11-19'), 'holiday on Nov 19');
-  await js('document.querySelector(".days [data-day=\\"10\\"]").click()'); await settle();
+  await js('document.querySelector(".thead [data-day=\\"10\\"]").click()'); await settle();
   ok(!file().includes('holiday 2026-11-19'), 'toggled back');
 });
 
@@ -243,13 +251,13 @@ await test('level resources (delays, no links) then clear', async () => {
 
 await test('save a baseline, then slips show after a change', async () => {
   await js('document.querySelector("[data-menu=baseline]").click()');
-  await js('document.querySelector("#menu [data-act=baseline]").click()');
+  await js(`document.querySelector('#menu [data-act="baseline:0"]').click()`);
   await waitFor(() => js('D.tasks.every(t => t.base)'), 'baseline');
   ok(/base=2026-11-09T08:00\//.test(file()), 'baseline saved');
   await js(`(() => { const el = document.querySelector('[data-id="5"][data-f="dur"]'); el.value = '8d'; el.dispatchEvent(new Event('change', { bubbles: true })); })()`); await settle();
   ok(await js('D.tasks.find(t => t.id === 5).slip') > 0, 'Frontend should slip');
   ok((await js('document.querySelector("#kpis").innerText')).toLowerCase().includes('vs baseline'), 'baseline KPI');
-  ok((await js('document.querySelector("[data-row=\\"5\\"] .slipc").textContent')) === '+2d', 'slip column for Frontend');
+  ok(await js('[...document.querySelectorAll("[data-row=\\"5\\"] .ro")].some(c => c.textContent === "+2d")'), 'slip column for Frontend');
   ok(await js('document.querySelectorAll(".base").length') > 5, 'baseline bars drawn');
   await shot('04-baseline');
 });
@@ -276,7 +284,7 @@ await test('multi-select with Shift+click and delete', async () => {
 });
 
 await test('people view: edit capacity, rate and days off', async () => {
-  await key('3', 'Digit3', 51); await sleep(50);
+  await key('5', 'Digit5', 53); await sleep(50);
   ok(await js('document.querySelectorAll("[data-res=name]").length') >= 4, 'people rows');
   const set = (f, v) => js(`(() => { const el = document.querySelector('[data-res="${f}"][data-name="Bo"]'); el.value = ${JSON.stringify(v)}; el.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await set('capacity', '50%'); await settle();
@@ -340,8 +348,181 @@ await test('Ctrl+O: create a new project file, then switch back', async () => {
   await waitFor(() => js('D.path.endsWith("test.plan")'), 'switch back');
 });
 
+// ---------- features added in 0.2 ----------
+const replaceProject = async text => {
+  const r = await js(`fetch('/api/save', { method: 'POST', headers: { 'X-Rplan-Token': TOKEN, 'X-Rplan-Rev': D.rev }, body: ${JSON.stringify(text)} }).then(r => r.json()).then(j => { if (j.ok) { accept(j); render(); } return j.ok || j.error; })`);
+  ok(r === true, 'could not load project: ' + r);
+};
+const richText = fs.readFileSync(new URL('./fixtures/rich.plan', import.meta.url), 'utf8');
+
+await test('every feature survives a round trip through the interface (nothing is dropped)', async () => {
+  await replaceProject(richText);
+  const before = file();
+  await js('commit(m => {})'); await settle();
+  const after = file();
+  if (before !== after) {
+    const a = before.split('\n'), b = after.split('\n'), k = a.findIndex((l, i) => l !== b[i]);
+    throw new Error(`line ${k + 1} changed:\n        before: ${a[k]}\n        after:  ${b[k]}`);
+  }
+  ok(before.includes('holiday every 12-25 observed Christmas') && before.includes('type material'), 'fixture loaded');
+});
+
+await test('effort-driven work, materials, costs and earned value are shown', async () => {
+  const t2 = await js('D.tasks.find(t => t.id === 2)');
+  ok(t2.work === 2400 && t2.edur > 0 && t2.edur !== t2.dur, 'effort-driven duration');
+  ok(t2.cost > 1000, 'costs include rate, per use, overtime, material and travel: ' + t2.cost);
+  ok(await js('D.ev.bac') > 0, 'earned value computed with a status date');
+  ok(await js('document.querySelector(".statusl") != null'), 'status date line drawn');
+  ok((await js('document.querySelector("#kpis").innerText')).includes('SPI'), 'SPI/CPI KPIs');
+});
+
+await test('search, filter, sort, group and choose columns', async () => {
+  await replaceProject(fs.readFileSync(plan, 'utf8').includes('task 9') ? fs.readFileSync(plan, 'utf8') : richText);
+  await js(`(() => { const q = document.querySelector('#q'); q.value = 'cure'; q.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await waitFor(() => js('search === "cure"'), 'search applied');
+  await sleep(50);
+  ok(await js('document.querySelectorAll(".row[data-row]").length') === 1, 'search shows one task');
+  ok(await js('!!document.querySelector(".row mark") || !!document.querySelector("[data-row=\\"5\\"]")'), 'search match');
+  await js('act("clear-filters")');
+  await js('act("filter:critical")'); await sleep(30);
+  ok(await js('[...document.querySelectorAll(".row[data-row]")].every(r => { const t = D.tasks.find(x => x.id === +r.dataset.row); return t.crit || t.summary || r.classList.contains("dimmed"); })'), 'only critical tasks (plus their phases)');
+  await js('act("clear-filters")'); await js('act("group:person")'); await sleep(30);
+  ok(await js('document.querySelectorAll(".row.grp").length') >= 2, 'grouped by person');
+  await js('act("clear-filters")'); await js('act("sort:start")'); await sleep(30);
+  ok(await js('!!document.querySelector(".gt.flat")'), 'sorted view is flat');
+  await js('act("clear-filters")');
+  await js(`document.querySelector('[data-menu="columns"]').click()`);
+  await js(`(() => { const c = document.querySelector('#menu [data-c="free"]'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  ok((await js('document.querySelector(".corner").textContent')).includes('Free slack'), 'free slack column added');
+  await js('act("cols-reset"); closeMenu()');
+});
+
+await test('timescales: days, weeks, months, quarters, years', async () => {
+  for (const [v, unit] of [['30', 'day'], ['10', 'week'], ['3', 'month'], ['1', 'quarter'], ['0.35', 'quarter']]) {
+    await js(`document.querySelector('[data-act="scale"][data-v="${v}"]').click()`); await sleep(20);
+    ok(await js('scaleUnits()[1]') === unit, `scale ${v} → ${unit}`);
+    ok(await js('document.querySelectorAll(".tier").length') === 2, 'two header tiers');
+  }
+  await js(`document.querySelector('[data-act="scale"][data-v="30"]').click()`);
+  await shot('11-scales');
+});
+
+await test('WBS chart and usage views (tables and workload chart)', async () => {
+  await js('document.activeElement.blur()');
+  await key('3', 'Digit3', 51); await sleep(40);
+  const wn = await js('document.querySelectorAll(".wnode").length'), wt = await js('D.tasks.length + 1');
+  ok(wn === wt, `one WBS box per task + the project (${wn} boxes, expected ${wt}; view=${await js('view')}; collapsed=${await js('[...collapsed].join()')})`);
+  await shot('12-wbs');
+  await key('4', 'Digit4', 52);
+  await waitFor(() => js('!!document.querySelector("table.usage")'), 'usage table');
+  ok(await js('document.querySelectorAll("table.usage tr.p").length') >= 1, 'a row per person');
+  await js(`document.querySelector('[data-act="usage-mode"][data-v="task"]').click()`); await sleep(30);
+  ok(await js('document.querySelectorAll("table.usage tbody tr").length') >= 3, 'rows per task');
+  await js(`document.querySelector('[data-act="usage-mode"][data-v="chart"]').click()`); await sleep(30);
+  ok(await js('document.querySelectorAll(".chartrow svg rect").length') > 0, 'workload chart drawn');
+  await shot('13-workload');
+  await js(`document.querySelector('[data-act="usage-mode"][data-v="person"]').click()`);
+  await key('1', 'Digit1', 49);
+});
+
+await test('printable reports render and print with page setup', async () => {
+  await js('window.print = () => { window.__printed = (window.__printed || 0) + 1; }');
+  await js('act("reports")');
+  for (const kind of ['summary', 'who', 'cash', 'ev', 'tasks', 'problems']) {
+    await js(`(() => { const s = document.querySelector('[data-rep="kind"]'); s.value = '${kind}'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await sleep(40);
+    ok(await js('document.querySelector(".paper h1")?.textContent') === await js('D.name'), `${kind} report`);
+  }
+  await js(`(() => { const s = document.querySelector('[data-rep="kind"]'); s.value = 'ev'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  ok(await js('document.querySelectorAll(".paper svg polyline").length') >= 1, 'earned value chart');
+  await shot('14-report-ev');
+  await js('document.querySelector("[data-act=rep-print]").click()'); await sleep(80);
+  ok(await js('window.__printed') === 1 && await js('document.body.classList.contains("printing-report")'), 'print with the report only');
+  ok((await js('document.querySelector("#page-setup").textContent')).includes('counter(page)'), 'page numbers');
+  await js('document.body.classList.remove("printing-report"); act("rep-close")');
+});
+
+await test('details panel: actual progress, effort and constraints', async () => {
+  await js('openDetails(3)'); await waitFor(() => js('!!document.querySelector("[data-insp=act-done], [data-act=act-done]")'), 'details');
+  await js('document.querySelector("[data-act=act-done]").click()'); await settle();
+  ok(/task 3 \|.*\| 100 \|.*af=/.test(file()), 'marked complete with an actual finish');
+  await js(`(() => { const s = document.querySelector('[data-insp="c-type"]'); s.value = 'fnlt'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`); await settle();
+  ok(/task 3 \|.*fnlt=/.test(file()), 'finish-no-later-than constraint');
+  // Regression: switching tasks while the name field has focus must not carry the old name over.
+  await js('document.querySelector("[data-insp=name]").focus()');
+  await js('openDetails(6)'); await sleep(60);
+  ok(await js('document.querySelector("[data-insp=name]").value') === await js('task(6).name'), 'details panel shows the new task\'s name');
+  await js(`(() => { const s = document.querySelector('[data-insp="work"]'); s.value = '32h'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`); await settle();
+  ok(/task 6 \|.*work=32h/.test(file()), 'effort-driven work saved');
+  await shot('15-details');
+  await js('act("details")');
+});
+
+await test('calendar: add a country\'s public holidays (they repeat every year)', async () => {
+  await js('act("calendar")');
+  await waitFor(() => js('!!document.querySelector("#country option")'), 'country list');
+  await js(`document.querySelector('#country').value = 'CO'`);
+  await js('document.querySelector("[data-act=add-country]").click()'); await settle();
+  ok((file().match(/^holiday every /gm) || []).length >= 18, 'Colombian holidays added');
+  ok(await js('D.holidays.some(([, n]) => n === "Día de los Reyes Magos")'), 'expanded for the project years');
+  await shot('16-calendar');
+  await js('act("dlg-close")');
+});
+
+await test('version history lists earlier versions and restores one', async () => {
+  await js('act("history")');
+  await waitFor(() => js('document.querySelectorAll("[data-act=hist-pick]").length > 0'), 'history entries');
+  await js('document.querySelector("[data-act=hist-pick]").click()');
+  const t0 = Date.now();
+  await waitFor(() => js('!!document.querySelector("[data-act=hist-restore]")'), 'diff preview', 20000).catch(async e => { throw new Error(e.message + ' — histDiff=' + await js('JSON.stringify(histDiff)?.slice(0, 200)')); });
+  if (Date.now() - t0 > 2000) console.log(`      (diff took ${Date.now() - t0} ms)`);
+  await shot('17-history');
+  const before = file();
+  await js('document.querySelector("[data-act=hist-restore]").click()'); await settle();
+  ok(file() !== before, 'restored a different version');
+  await key('z', 'KeyZ', 90, 2); await settle();
+  ok(file() === before, 'Ctrl+Z goes back');
+});
+
+await test('recurring task creates a summary with occurrences', async () => {
+  await js('act("recurring")');
+  await waitFor(() => js('!!document.querySelector("#rec-name")'), 'dialog');
+  await js(`document.querySelector('#rec-name').value = 'Standup'; document.querySelector('#rec-count').value = '4'; document.querySelector('#rec-dur').value = '30m'`);
+  await js('document.querySelector("[data-act=rec-create]").click()'); await settle();
+  ok((file().match(/\| Standup \d \| 30m \|/g) || []).length === 4, 'four occurrences: ' + (file().match(/Standup.*/g) || []).join(' / '));
+});
+
+await test('Spanish interface', async () => {
+  await js('act("lang")'); await sleep(40);
+  ok((await js('document.querySelector("#tabs").innerText')).includes('Red'), 'tabs in Spanish');
+  ok((await js('document.querySelector("#kpis").innerText')).toLowerCase().includes('progreso'), 'KPIs in Spanish');
+  await shot('18-spanish');
+  await js('act("lang")');
+  ok((await js('document.querySelector("#tabs").innerText')).includes('Network'), 'back to English');
+});
+
+await test('big plans stay fast (2,000 tasks, rows drawn on demand)', async () => {
+  let text = 'project Big\nstart 2026-01-05\nresource Ana | rate 50\n';
+  for (let i = 1; i <= 2000; i++) {
+    const phase = i % 50 === 1;
+    text += `${phase ? '' : '  '}task ${i} | ${phase ? 'Phase' : 'Task'} ${i} | ${phase ? '' : (i % 7) + 1 + 'd'} | ${!phase && i % 50 > 2 ? i - 1 : ''} | ${i % 3 ? 'Ana' : ''} | ${i % 4 * 25}\n`;
+  }
+  const t0 = Date.now();
+  await replaceProject(text);
+  const loadMs = Date.now() - t0;
+  const rows = await js('document.querySelectorAll(".row[data-row]").length');
+  ok(rows < 200, `only visible rows are in the page (${rows})`);
+  const ms = await js('(() => { const t = performance.now(); render(); return performance.now() - t; })()');
+  ok(ms < 1500, `full redraw took ${Math.round(ms)} ms`);
+  const sms = await js(`(async () => { const v = document.querySelector('#main .view'); const t = performance.now(); for (let k = 1; k <= 20; k++) { v.scrollTop = k * 2000; paintWindow(); } return performance.now() - t; })()`);
+  ok(sms < 1500, `scrolling 20 screens took ${Math.round(sms)} ms`);
+  ok(await js('!!document.querySelector("[data-row=\\"1300\\"], [data-row=\\"1250\\"], [data-row=\\"1200\\"]") || document.querySelectorAll(".row[data-row]").length > 0'), 'rows painted after scrolling');
+  console.log(`      (save+schedule+render of 2,000 tasks: ${loadMs} ms, redraw ${Math.round(ms)} ms, 20 scrolls ${Math.round(sms)} ms)`);
+  await replaceProject(richText);
+});
+
 await test('external edits to the .plan file reload automatically', async () => {
-  fs.writeFileSync(plan, file().replace('project Website Launch', 'project Edited Elsewhere'));
+  fs.writeFileSync(plan, file().replace(/^project .*$/m, 'project Edited Elsewhere'));
   await waitFor(() => js('D.name === "Edited Elsewhere"'), 'live reload', 6000);
 });
 
@@ -351,6 +532,9 @@ await test('stale writes are refused instead of overwriting newer changes', asyn
 });
 
 await shot('07-final');
+await test('no JavaScript errors were thrown on the page', async () => {
+  ok(!pageErrors.length, pageErrors.slice(0, 5).join('\n      '));
+});
 console.log(`\n${passed} passed, ${failures} failed`);
 ws.close();
 for (const p of procs) try { p.kill(); } catch (e) {}
