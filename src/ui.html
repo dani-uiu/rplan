@@ -1,0 +1,1437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>rplan</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c5cff'/%3E%3Crect x='6' y='8' width='12' height='4' rx='2' fill='white'/%3E%3Crect x='11' y='14' width='14' height='4' rx='2' fill='white' opacity='.8'/%3E%3Crect x='8' y='20' width='9' height='4' rx='2' fill='white' opacity='.6'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#0b0e14;--panel:#121722;--panel2:#171d2a;--panel3:#1d2433;--line:#222a3a;--line2:#1a2130;
+  --fg:#e8ecf4;--mut:#8b95a9;--dim:#5c667a;
+  --acc:#7c5cff;--acc2:#4f8cff;--ok1:#4f8cff;--ok2:#36c9d6;
+  --cr1:#ff4d6d;--cr2:#ff8a4c;--ms:#ffc94d;--good:#32d583;--warn:#ffb020;
+  --off:rgba(255,255,255,.028);--hol:rgba(255,201,77,.08);--sel:rgba(124,92,255,.13);--sum:#dfe4ee;
+  --shadow:0 10px 30px rgba(0,0,0,.45);
+  color-scheme:dark;
+}
+:root[data-theme="light"]{
+  --bg:#f4f6fb;--panel:#ffffff;--panel2:#f7f8fc;--panel3:#eef1f7;--line:#e2e6ee;--line2:#edf0f5;
+  --fg:#141a26;--mut:#5f6b80;--dim:#9aa3b5;--sum:#2a3142;
+  --off:rgba(20,30,60,.04);--hol:rgba(255,170,0,.12);--sel:rgba(124,92,255,.10);
+  --shadow:0 10px 30px rgba(20,30,60,.15);
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:13px/1.4 Inter,"Segoe UI Variable","Segoe UI",system-ui,sans-serif;display:flex;flex-direction:column;overflow:hidden;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+input,select,textarea{min-width:0}
+[hidden]{display:none!important}
+svg.i{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* top bar */
+.top{display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
+.logo{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.02em;font-size:15px}
+.logo i{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,var(--acc),var(--acc2));display:grid;place-items:center;box-shadow:0 4px 14px rgba(124,92,255,.45)}
+.pname{background:transparent;border:1px solid transparent;border-radius:8px;padding:5px 8px;font-size:15px;font-weight:600;width:260px}
+.pname:hover{border-color:var(--line)}.pname:focus{outline:none;border-color:var(--acc);background:var(--panel2)}
+.field{display:flex;align-items:center;gap:6px;color:var(--mut);font-size:12px}
+.field input{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:4px 8px}
+.tabs{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:3px;margin-left:auto}
+.tabs button{border:0;background:transparent;padding:6px 13px;border-radius:7px;cursor:pointer;color:var(--mut);display:flex;gap:6px;align-items:center;font-weight:500}
+.tabs button.on{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;box-shadow:0 2px 10px rgba(124,92,255,.4)}
+.tabs button:not(.on):hover{color:var(--fg)}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel2);padding:5px 10px;border-radius:8px;cursor:pointer;font-weight:500;white-space:nowrap;height:30px}
+.btn:hover:not(:disabled){border-color:var(--dim)}
+.btn.primary{background:linear-gradient(135deg,var(--acc),var(--acc2));border-color:transparent;color:#fff}
+.btn.icon{padding:5px 7px}
+.btn.on{border-color:var(--cr1);color:var(--cr1)}
+.btn.danger{color:var(--cr1)}
+.btn.sm{height:26px;padding:3px 9px;font-size:12px}
+.btn:disabled{opacity:.4;cursor:default}
+.sep{width:1px;height:20px;background:var(--line);margin:0 2px}
+.caret{opacity:.6;margin-left:-2px}
+
+/* toolbar + KPIs */
+.toolbar{display:flex;gap:6px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+.toolbar .grow{flex:1}
+.kpis{display:flex;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg);overflow-x:auto}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:7px 13px;min-width:112px;flex:none}
+.kpi b{display:block;font-size:16.5px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums;white-space:nowrap}
+.kpi b small{font-size:11.5px;color:var(--mut);font-weight:500}
+.kpi span{color:var(--mut);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em}
+.kpi.warn b{color:var(--cr1)}.kpi.good b{color:var(--good)}.kpi.amber b{color:var(--warn)}
+.pbar{height:4px;border-radius:4px;background:var(--line);margin-top:5px;overflow:hidden}
+.pbar>div{height:100%;background:linear-gradient(90deg,var(--good),#7ee0b0);border-radius:4px;transition:width .4s}
+
+/* layout */
+.work{flex:1;min-height:0;display:flex;position:relative}
+main{flex:1;min-width:0;position:relative;overflow:hidden}
+.view{position:absolute;inset:0;overflow:auto}
+.gt{display:grid;grid-template-columns:var(--gw) max-content;width:max-content;min-width:100%;align-content:start}
+.corner,.thead{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);height:52px}
+.corner{left:0;z-index:7;display:grid;align-items:end;border-right:1px solid var(--line)}
+.gridl{position:sticky;left:0;z-index:4;background:var(--panel);border-right:1px solid var(--line)}
+.cols{display:grid;grid-template-columns:var(--cols);align-items:center}
+.corner .cols{height:28px;color:var(--mut);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.corner .cols>div{padding:0 7px;white-space:nowrap;overflow:hidden}
+.row{height:var(--rh);border-bottom:1px solid var(--line2);position:relative}
+.row:hover{background:var(--panel2)}
+.row.sel{background:var(--sel)}
+.row.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--acc)}
+.row.drop-before{box-shadow:inset 0 2px 0 var(--acc)}
+.row.drop-after{box-shadow:inset 0 -2px 0 var(--acc)}
+.row>div{padding:0 3px;min-width:0}
+.row .num{color:var(--dim);font-variant-numeric:tabular-nums;padding-left:6px;font-size:12px;cursor:grab;display:flex;align-items:center;gap:3px;user-select:none;height:100%}
+.row .num::before{content:"⋮⋮";letter-spacing:-3px;opacity:0;font-size:11px;margin-right:2px}
+.row:hover .num::before{opacity:.6}
+.row.crit .num{color:var(--cr1)}
+.row .wbs{color:var(--dim);font-size:11.5px;font-variant-numeric:tabular-nums;padding-left:6px}
+.row input{width:100%;background:transparent;border:1px solid transparent;border-radius:6px;padding:4px 6px;font-variant-numeric:tabular-nums}
+.row input:hover:not(:disabled){border-color:var(--line)}
+.row input:focus{outline:none;border-color:var(--acc);background:var(--bg)}
+.row input:disabled{color:var(--mut)}
+.row.sum input[data-f="name"]{font-weight:650}
+.row .date{color:var(--mut);font-size:12px;padding-left:7px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden}
+.row .date i{font-style:normal;color:var(--dim)}
+.row .nm{display:flex;align-items:center;gap:4px}
+.chev{border:0;background:transparent;cursor:pointer;color:var(--mut);width:18px;height:18px;border-radius:5px;display:grid;place-items:center;flex:none;padding:0;transition:transform .15s}
+.chev:hover{background:var(--panel3);color:var(--fg)}
+.chev.closed{transform:rotate(-90deg)}
+.chev-sp{width:18px;flex:none}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;background:linear-gradient(135deg,var(--ok1),var(--ok2))}
+.dot.c{background:linear-gradient(135deg,var(--cr1),var(--cr2))}
+.dot.m{background:var(--ms);border-radius:2px;transform:rotate(45deg)}
+.dot.s{background:var(--sum);border-radius:2px}
+.badge{font-size:10.5px;flex:none;cursor:default}
+.pct{position:relative}
+.pct .mini{position:absolute;left:9px;right:9px;bottom:4px;height:2px;border-radius:2px;background:var(--line)}
+.pct .mini>div{height:100%;background:var(--good);border-radius:2px}
+.money,.slipc{font-variant-numeric:tabular-nums;font-size:12px;color:var(--mut);padding-left:7px;white-space:nowrap}
+.slipc.bad{color:var(--cr1)}.slipc.goodc{color:var(--good)}
+.del{opacity:0;border:0;background:transparent;cursor:pointer;color:var(--mut);padding:4px;border-radius:6px}
+.row:hover .del{opacity:1}.del:hover{color:var(--cr1);background:var(--panel3)}
+.row.add input{color:var(--mut)}
+.row.add input::placeholder{color:var(--dim)}
+.empty{padding:28px;color:var(--mut);text-align:center}
+
+/* timeline */
+.months,.days{display:flex;height:24px;white-space:nowrap}
+.days{height:28px}
+.months>div{border-left:1px solid var(--line);padding:4px 8px;font-weight:600;font-size:12px;overflow:hidden;flex:none}
+.days>div{flex:none;text-align:center;font-size:11px;color:var(--mut);border-left:1px solid var(--line2);line-height:28px;cursor:pointer;overflow:visible;font-variant-numeric:tabular-nums}
+.days>div.we{color:var(--dim);background:var(--off)}
+.days>div.hol{color:var(--ms);background:var(--hol)}
+.days>div.xw{color:var(--good)}
+.days>div.today{color:#fff;background:var(--acc);border-radius:6px 6px 0 0}
+.days>div:hover{color:var(--fg)}
+.tbody{position:relative}
+.stripe{position:absolute;top:0;bottom:0;background:var(--off);pointer-events:none}
+.stripe.hol{background:var(--hol)}
+.todayl{position:absolute;top:0;bottom:0;width:2px;background:var(--acc);opacity:.7;pointer-events:none}
+.selband{position:absolute;left:0;right:0;height:var(--rh);background:var(--sel);pointer-events:none}
+.bar{position:absolute;height:20px;border-radius:6px;background:linear-gradient(90deg,var(--ok1),var(--ok2));box-shadow:0 2px 8px rgba(79,140,255,.22);cursor:grab;transition:filter .15s,opacity .2s}
+.bar.c{background:linear-gradient(90deg,var(--cr1),var(--cr2));box-shadow:0 2px 10px rgba(255,77,109,.28)}
+.bar.late{outline:2px dashed var(--warn);outline-offset:2px}
+.bar:hover{filter:brightness(1.12)}
+.bar.dragging,.ms.dragging{opacity:.75;cursor:grabbing;z-index:3}
+.bar .prog{position:absolute;left:0;top:0;bottom:0;border-radius:6px 0 0 6px;background:repeating-linear-gradient(-45deg,rgba(255,255,255,.3) 0 6px,rgba(255,255,255,.13) 6px 12px);pointer-events:none}
+.bar .prog.full{border-radius:6px}
+.lab{position:absolute;left:calc(100% + 10px);top:2px;white-space:nowrap;font-size:12px;color:var(--mut);pointer-events:none}
+.lab b{color:var(--fg);font-weight:500}
+.lab .w{color:var(--warn)}
+.bar .in{position:absolute;left:8px;right:8px;top:2px;color:#fff;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.3)}
+.hr{position:absolute;right:-3px;top:0;bottom:0;width:10px;cursor:ew-resize}
+.hl{position:absolute;right:-22px;top:3px;width:14px;height:14px;border-radius:50%;border:2px solid var(--acc);background:var(--panel);opacity:0;cursor:crosshair;transition:opacity .15s}
+.bar:hover .hl,.ms:hover .hl,.sbar:hover .hl{opacity:1}
+.pin{position:absolute;left:-15px;top:2px;font-size:11px;pointer-events:none}
+.ms{position:absolute;width:16px;height:16px;transform:rotate(45deg);background:var(--ms);border-radius:3px;box-shadow:0 0 12px rgba(255,201,77,.5);cursor:grab}
+.ms.c{background:linear-gradient(135deg,var(--cr1),var(--ms))}
+.ms .lab{left:24px;top:-4px;transform:rotate(-45deg);transform-origin:0 50%;color:var(--fg);font-weight:500}
+.ms .hl{transform:rotate(-45deg);right:-24px;top:-4px}
+.sbar{position:absolute;height:8px;background:var(--sum);border-radius:2px;cursor:pointer}
+.sbar::before,.sbar::after{content:"";position:absolute;top:0;border:6px solid transparent;border-top:8px solid var(--sum)}
+.sbar::before{left:0;border-left-color:var(--sum)}
+.sbar::after{right:0;border-right-color:var(--sum)}
+.sbar .sprog{position:absolute;left:0;top:2px;height:4px;background:var(--good);border-radius:2px;pointer-events:none}
+.sbar .lab{top:-5px}
+.sbar.c{background:linear-gradient(90deg,var(--cr1),var(--cr2))}
+.sbar.c::before{border-top-color:var(--cr1);border-left-color:var(--cr1)}
+.sbar.c::after{border-top-color:var(--cr2);border-right-color:var(--cr2)}
+.base{position:absolute;height:3px;background:var(--dim);border-radius:2px;opacity:.8;pointer-events:none}
+.float{position:absolute;height:0;border-top:2px dotted var(--dim);pointer-events:none}
+.dl{position:absolute;width:0;height:0;border:6px solid transparent;border-top:8px solid var(--cr1);cursor:help}
+.dl.ok{border-top-color:var(--good)}
+.dim .bar:not(.c),.dim .ms:not(.c),.dim .sbar:not(.c){opacity:.22}
+.dim .lnk:not(.c){opacity:.12}
+svg.links{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
+.lnk{fill:none;stroke:var(--dim);stroke-width:1.5}
+.lnk.c{stroke:var(--cr1);stroke-width:1.8}
+.tmp{stroke:var(--acc);stroke-width:2;stroke-dasharray:5 4;fill:none}
+
+/* inspector */
+.insp{width:360px;flex:none;border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;padding:0 0 30px}
+.ih{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
+.ih small{color:var(--mut)}
+.ih .x{margin-left:auto;border:0;background:transparent;color:var(--mut);cursor:pointer;font-size:18px;line-height:1;padding:2px 6px;border-radius:6px}
+.ih .x:hover{background:var(--panel3);color:var(--fg)}
+.insp .iname{width:calc(100% - 28px);margin:12px 14px 4px;font-size:16px;font-weight:650;background:transparent;border:1px solid transparent;border-radius:8px;padding:5px 7px}
+.insp .iname:hover{border-color:var(--line)}.insp .iname:focus{outline:none;border-color:var(--acc);background:var(--bg)}
+.chips{display:flex;gap:5px;flex-wrap:wrap;padding:0 14px 6px}
+.chip{display:inline-flex;align-items:center;font-size:10.5px;font-weight:650;padding:2px 8px;border-radius:20px;background:rgba(79,140,255,.15);color:var(--ok1);white-space:nowrap}
+.chip.r{background:rgba(255,77,109,.15);color:var(--cr1)}
+.chip.y{background:rgba(255,176,32,.16);color:var(--warn)}
+.chip.g{background:rgba(50,213,131,.15);color:var(--good)}
+.chip.n{background:var(--panel3);color:var(--mut)}
+.isec{padding:12px 14px;border-top:1px solid var(--line2)}
+.isec h5{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);display:flex;align-items:center;gap:6px}
+.isec h5 .btn{margin-left:auto}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px}
+.fl{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--mut)}
+.fl input,.fl select,.insp textarea,.deprow input,.deprow select,.whorow input,.insp .wide{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:5px 7px;color:var(--fg);width:100%}
+.fl input:focus,.fl select:focus,.insp textarea:focus,.deprow input:focus,.deprow select:focus,.whorow input:focus,.insp .wide:focus{outline:none;border-color:var(--acc)}
+.fl input:disabled{opacity:.5}
+.ro{display:flex;flex-direction:column;font-size:11.5px;color:var(--mut)}
+.ro b{color:var(--fg);font-weight:500;font-size:12.5px;font-variant-numeric:tabular-nums}
+.ro b.r{color:var(--cr1)}
+.deprow,.whorow{display:grid;gap:5px;margin-bottom:6px;align-items:center}
+.deprow{grid-template-columns:1fr 64px 62px 26px}
+.whorow{grid-template-columns:1fr 70px 26px}
+.rm{border:0;background:transparent;color:var(--mut);cursor:pointer;border-radius:6px;height:26px}
+.rm:hover{color:var(--cr1);background:var(--panel3)}
+.hint{color:var(--dim);font-size:11px;display:block;margin-top:4px;line-height:1.45}
+.insp textarea{min-height:70px;resize:vertical}
+.warnbox{background:rgba(255,176,32,.1);border:1px solid rgba(255,176,32,.35);color:var(--warn);border-radius:8px;padding:7px 9px;font-size:12px;margin-top:8px}
+
+/* network */
+.net{position:relative}
+.node{position:absolute;width:210px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;box-shadow:var(--shadow);cursor:pointer;transition:transform .15s,border-color .15s}
+.node:hover{transform:translateY(-2px);border-color:var(--dim)}
+.node.c{border-color:var(--cr1);box-shadow:0 0 0 1px var(--cr1),0 8px 24px rgba(255,77,109,.22)}
+.node.sel{outline:2px solid var(--acc);outline-offset:2px}
+.node h4{margin:0 0 6px;font-size:13px;display:flex;gap:6px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node h4 small{color:var(--dim);font-weight:500}
+.node .grp{font-size:10.5px;color:var(--mut);margin:-3px 0 6px;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node .g{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;font-size:11px;color:var(--mut)}
+.node .g b{color:var(--fg);font-weight:500;font-variant-numeric:tabular-nums}
+.node .pb{height:3px;background:var(--line);border-radius:3px;margin-top:8px;overflow:hidden}
+.node .pb>div{height:100%;background:var(--good)}
+.nedge{fill:none;stroke:var(--dim);stroke-width:1.6}
+.nedge.c{stroke:var(--cr1);stroke-width:2}
+
+/* people */
+.res .row{height:var(--rh)}
+.res .who{display:flex;align-items:center;gap:8px;padding:0 8px 0 10px;height:100%}
+.av{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:700;font-size:11px;flex:none}
+.res .meta{font-size:11.5px;color:var(--mut);line-height:1.3;padding-left:6px}
+.res .meta b{color:var(--fg);font-weight:500}
+.res .meta .bad{color:var(--cr1);font-weight:600}
+.cell{position:absolute;height:28px;border-radius:5px;display:grid;place-items:center;font-size:10.5px;font-weight:700;color:#fff;background:linear-gradient(180deg,var(--ok1),var(--ok2));opacity:calc(.35 + .65 * var(--a))}
+.cell.over{background:linear-gradient(180deg,var(--cr1),var(--cr2));opacity:1;box-shadow:0 0 12px rgba(255,77,109,.4)}
+.poff{position:absolute;height:var(--rh);background:repeating-linear-gradient(-45deg,transparent 0 4px,var(--off) 4px 8px),var(--hol);pointer-events:none}
+.banner{display:flex;align-items:center;gap:12px;margin:12px 14px;padding:11px 15px;border-radius:12px;border:1px solid var(--line);background:var(--panel)}
+.banner.bad{border-color:rgba(255,77,109,.5);background:linear-gradient(90deg,rgba(255,77,109,.12),transparent)}
+.banner.ok{border-color:rgba(50,213,131,.4);background:linear-gradient(90deg,rgba(50,213,131,.1),transparent)}
+.banner .acts{margin-left:auto;display:flex;gap:6px}
+
+/* menus, dialog, status, toast, tooltip */
+.menu{position:fixed;z-index:40;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:5px;min-width:220px}
+.menu button{display:flex;width:100%;align-items:center;gap:8px;border:0;background:transparent;padding:7px 10px;border-radius:7px;cursor:pointer;text-align:left}
+.menu button:hover{background:var(--panel3)}
+.menu button small{margin-left:auto;color:var(--dim)}
+.menu hr{border:0;border-top:1px solid var(--line);margin:4px 0}
+dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:0;width:min(880px,calc(100vw - 32px));max-height:calc(100vh - 48px)}
+dialog::backdrop{background:rgba(5,8,14,.55);backdrop-filter:blur(2px)}
+.dh{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:1}
+.dh h3{margin:0;font-size:16px}
+.dh .x{margin-left:auto;border:0;background:transparent;color:var(--mut);cursor:pointer;font-size:20px;padding:2px 8px;border-radius:6px}
+.db{padding:6px 18px 18px}
+.db h4{margin:16px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
+.wk{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:6px 18px}
+.wkrow{display:grid;grid-template-columns:62px 1fr 36px;align-items:center;gap:8px}
+.wkrow input[type=text],.exrow input,.exrow select,.db .inl input{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:5px 8px;width:100%}
+.wkrow input:disabled,.exrow input:disabled{opacity:.4}
+.sw{display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600}
+.mut{color:var(--mut);font-size:12px}
+.presets{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.inl{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.inl label{display:flex;align-items:center;gap:8px;color:var(--mut)}
+.inl input{width:90px!important}
+.exrow{display:grid;grid-template-columns:140px 136px 14px 136px 1fr 170px 28px;gap:6px;align-items:center;margin-bottom:6px}
+.months4{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
+.mon h6{margin:0 0 6px;font-size:12.5px}
+.mon .g7{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.mon .g7 span{font-size:10px;color:var(--dim);text-align:center}
+.mon .g7 button{border:0;background:var(--panel2);border-radius:5px;height:24px;font-size:11px;cursor:pointer;font-variant-numeric:tabular-nums}
+.mon .g7 button:hover{outline:1px solid var(--acc)}
+.mon .g7 button.off{background:transparent;color:var(--dim)}
+.mon .g7 button.hol{background:var(--hol);color:var(--ms);font-weight:700}
+.mon .g7 button.xw{background:rgba(50,213,131,.15);color:var(--good);font-weight:700}
+.mon .g7 button.st{outline:2px solid var(--acc)}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:13px}
+.keys kbd,.status kbd{background:var(--panel2);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;font:inherit;font-size:11px}
+.status{display:flex;gap:16px;align-items:center;padding:5px 14px;border-top:1px solid var(--line);background:var(--panel);color:var(--mut);font-size:11.5px;white-space:nowrap;overflow:hidden}
+.status .saved{color:var(--good);transition:opacity .4s}
+.status .r{margin-left:auto;display:flex;gap:14px}
+#toasts{position:fixed;bottom:42px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;z-index:60;pointer-events:none}
+.toast{background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);padding:9px 16px;border-radius:10px;animation:tin .25s ease-out;max-width:640px}
+.toast.err{border-color:var(--cr1);color:var(--cr1)}
+@keyframes tin{from{opacity:0;transform:translateY(8px)}}
+#tip{position:fixed;z-index:70;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:10px 12px;font-size:12px;display:none;min-width:210px;max-width:340px}
+#tip h5{margin:0 0 6px;font-size:13px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#tip .g{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;color:var(--mut)}
+#tip .g b{color:var(--fg);font-weight:500}
+
+@media (max-width:1100px){.hide-m{display:none!important}.pname{width:170px}}
+@media print{
+  @page{size:landscape;margin:10mm}
+  body{overflow:visible;height:auto;background:#fff;color:#000;--bg:#fff;--panel:#fff;--panel2:#fff;--fg:#000;--mut:#444;--line:#ccc;--line2:#e5e5e5;--sum:#222;--off:#f3f3f3}
+  .top .tabs,.top #theme,.top #help,.toolbar,.status,.insp,#toasts,#tip,.row.add,.del,.hl,.hr{display:none!important}
+  .work,main{display:block;overflow:visible}
+  .view{position:static;overflow:visible}
+  .corner,.thead,.gridl{position:static}
+  .row input{border:0!important}
+  .bar,.ms,.cell,.sbar{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="logo"><i><svg class="i" viewBox="0 0 24 24" style="stroke:#fff"><path d="M4 6h9M8 12h12M6 18h7"/></svg></i>rplan</div>
+  <input class="pname" id="pname" title="Project name" spellcheck="false" aria-label="Project name">
+  <label class="field hide-m">Start <input type="date" id="pstart" aria-label="Project start date"></label>
+  <nav class="tabs" id="tabs">
+    <button data-v="gantt"><svg class="i" viewBox="0 0 24 24"><path d="M3 6h10M7 12h12M5 18h8"/></svg>Gantt</button>
+    <button data-v="network"><svg class="i" viewBox="0 0 24 24"><rect x="2" y="4" width="7" height="6" rx="1.5"/><rect x="15" y="14" width="7" height="6" rx="1.5"/><path d="M9 7h3v10h3"/></svg>Network</button>
+    <button data-v="resources"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5M16 4.5a3.5 3.5 0 010 7M19 14.8c1.4.9 2.3 2.7 2.6 5.2"/></svg>People</button>
+  </nav>
+  <button class="btn icon" id="help" data-act="help" title="Keyboard shortcuts (?)">?</button>
+  <button class="btn icon" id="theme" title="Toggle theme"><svg class="i" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg></button>
+</header>
+<section class="toolbar" id="toolbar"></section>
+<section class="kpis" id="kpis"></section>
+<div class="work">
+  <main id="main"></main>
+  <aside class="insp" id="insp"></aside>
+</div>
+<footer class="status">
+  <span id="fpath"></span>
+  <span class="saved" id="saved" style="opacity:0">● Saved</span>
+  <span class="r hide-m">
+    <span><kbd>N</kbd> new</span><span><kbd>Tab</kbd> indent</span><span><kbd>Del</kbd> delete</span><span><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</span>
+    <span>drag bar = move · drag edge = duration · drag ○ = link</span><span><kbd>?</kbd> all shortcuts</span>
+  </span>
+</footer>
+<dialog id="dlg"></dialog>
+<input type="file" id="file" accept=".xml,application/xml,text/xml" hidden>
+<datalist id="dl-people"></datalist>
+<div id="toasts" role="status" aria-live="polite"></div>
+<div id="tip"></div>
+
+<script>
+"use strict";
+const TOKEN = "__RPLAN_TOKEN__";
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DOWL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const ORDER = [1, 2, 3, 4, 5, 6, 0];
+const STD = [[480, 720], [780, 1020]];
+const KIND = { FS: 'Finish → Start', SS: 'Start → Start', FF: 'Finish → Finish', SF: 'Start → Finish' };
+const ICON = {
+  plus: '<path d="M12 5v14M5 12h14"/>', undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 010 10h-3"/>',
+  redo: '<path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 000 10h3"/>', zin: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4M8 11h6M11 8v6"/>',
+  zout: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4M8 11h6"/>', fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  level: '<path d="M3 7h6M3 12h10M3 17h14M17 4l3 3-3 3"/>', fire: '<path d="M12 3s5 4.5 5 9.5a5 5 0 01-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3-1-5 1-8z"/>',
+  dl: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', up: '<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>', trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  cal: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>', ind: '<path d="M4 6h16M10 12h10M10 18h10M4 10l3 2.5L4 15"/>',
+  out: '<path d="M4 6h16M10 12h10M10 18h10M7 10l-3 2.5L7 15"/>', side: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
+  base: '<path d="M3 17h18M6 13h8M6 9h12"/>', table: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/>',
+  chev: '<path d="M6 9l6 6 6-6"/>',
+};
+const ic = n => `<svg class="i" viewBox="0 0 24 24">${ICON[n]}</svg>`;
+function store(k, v) { try { if (v === undefined) return localStorage.getItem('rplan.' + k); localStorage.setItem('rplan.' + k, v); } catch (e) { return null; } }
+
+/* ---------- state ---------- */
+let D = null, undo = [], redo = [], drag = null, dragRow = null, suppressClick = false, dlgKind = null, chain = Promise.resolve();
+let sel = new Set(), primary = null, anchor = null, focusCrit = false;
+let view = ['gantt', 'network', 'resources'].includes(location.hash.slice(1)) ? location.hash.slice(1) : store('view') || 'gantt';
+let dw = +store('dw') || 0;
+let tableMode = store('table') || 'full';
+let inspOpen = store('insp') === '1';
+let collapsed = new Set();
+const RH = 36, PAD = 3, RRH = 52;
+const inspW = () => inspOpen && sel.size ? 360 : 0;
+
+/* ---------- calendar & formatting ---------- */
+let START = 0, EXC = new Map();
+const ymd = s => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, m - 1, d); };
+const dateOf = d => new Date(START + d * 864e5);
+const dateStr = d => dateOf(d).toISOString().slice(0, 10);
+const hm = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const dtStr = m => `${dateStr(Math.floor(m / 1440))}T${hm(((m % 1440) + 1440) % 1440)}`;
+const wdOf = d => dateOf(d).getUTCDay();
+const dayHours = d => EXC.has(d) ? EXC.get(d).hours : D.week[wdOf(d)];
+const isOff = d => dayHours(d).length === 0;
+const nice = d => { const x = dateOf(d); return `${DOW[x.getUTCDay()]} ${MON[x.getUTCMonth()]} ${x.getUTCDate()}`; };
+const offOf = s => Math.round((ymd(s) - START) / 864e5);
+const sDay = t => Math.floor(t.es / 1440);
+const fDay = t => t.ef > t.es ? Math.floor((t.ef - 1) / 1440) : Math.floor(t.es / 1440);
+const dmin = () => D.dayMinutes;
+const hoursStr = h => h.length ? h.map(([a, b]) => `${hm(a)}-${hm(b)}`).join(' ') : 'off';
+const hoursLen = h => h.reduce((a, [x, y]) => a + y - x, 0);
+const cl = s => String(s ?? '').replace(/[|;\r\n]/g, ' ').trim();
+const rn = s => cl(s).replace(/[,\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+function workDays(a, b) { let n = 0; for (let d = a; d <= b; d++) if (!isOff(d)) n++; return n; }
+function fmtDur(m) { if (!m) return '0'; const d = dmin(); if (m % d === 0) return `${m / d}d`; if (m % 60 === 0) return `${m / 60}h`; return `${m}m`; }
+function fmtDays(m) { const v = m / dmin(); return (Math.abs(v - Math.round(v)) < 0.05 ? Math.round(v) : v.toFixed(1)) + 'd'; }
+function money(x) { const v = Math.round(+x || 0); return (v < 0 ? '-' : '') + (D.currency || '$') + Math.abs(v).toLocaleString('en-US'); }
+function when(m, isEnd) {
+  const d = Math.floor((isEnd ? m - 1 : m) / 1440), h = dayHours(d), t = m - d * 1440;
+  const edge = h.length && (t === h[0][0] || t === h[h.length - 1][1]);
+  return `${nice(d)}${edge ? '' : ' ' + hm(t % 1440)}`;
+}
+const kindStr = d => `${d.id}${d.kind === 'FS' ? '' : d.kind}${d.lag ? (d.lag > 0 ? '+' : '-') + fmtDur(Math.abs(d.lag)) : ''}`;
+const depsStr = t => t.deps.map(kindStr).join(', ');
+const whoStr = t => t.who.map(a => a.units === 100 ? a.name : `${a.name}[${a.units}%]`).join(', ');
+function nowRel() { const n = new Date(); return Math.round((Date.UTC(n.getFullYear(), n.getMonth(), n.getDate(), n.getHours(), n.getMinutes()) - START) / 60000); }
+const todayOff = () => Math.floor(nowRel() / 1440);
+function noClick() { suppressClick = true; setTimeout(() => { suppressClick = false; }, 0); }
+
+/* ---------- parsing user input (mirrors the .plan format) ---------- */
+function parseDur(s) {
+  s = String(s).trim().toLowerCase().replace(/\?$/, '');
+  const m = s.match(/^(\d+(?:\.\d+)?|\.\d+)\s*([a-z]*)$/);
+  if (!m) throw new Error(`"${s}" isn't a duration — try 3d, 4h, 30m, 2w or 0 for a milestone`);
+  const u = m[2] || 'd';
+  const per = /^(d|days?|ed)$/.test(u) ? dmin() : /^(h|hrs?|hours?)$/.test(u) ? 60 : /^(m|mins?|minutes?)$/.test(u) ? 1 : /^(w|wks?|weeks?)$/.test(u) ? dmin() * 5 : null;
+  if (per == null) throw new Error(`"${s}": unknown unit — use d, h, m or w`);
+  return Math.round(+m[1] * per);
+}
+function parseLag(s) { s = String(s).trim(); if (!s || s === '0') return 0; const m = s.match(/^([+-])?\s*(.+)$/); const v = parseDur(m[2]); return m[1] === '-' ? -v : v; }
+function parseDeps(s) {
+  const out = [];
+  for (const part of String(s).split(',').map(x => x.trim()).filter(Boolean)) {
+    const m = part.match(/^#?(\d+)\s*(FS|SS|FF|SF)?\s*(?:([+-])\s*(.+))?$/i);
+    if (!m) throw new Error(`"${part}" isn't a link — examples: 3, 3SS, 3FS+2d, 3FF-4h`);
+    const lag = m[3] ? (m[3] === '-' ? -parseDur(m[4]) : parseDur(m[4])) : 0;
+    out.push({ id: +m[1], kind: (m[2] || 'FS').toUpperCase(), lag });
+  }
+  return out;
+}
+function parseWho(s) {
+  const out = [];
+  for (const part of String(s).split(',').map(x => x.trim()).filter(Boolean)) {
+    const m = part.match(/^(.+?)\s*(?:\[\s*(\d+)\s*%?\s*\])?$/);
+    const name = rn(m[1]), units = m[2] ? +m[2] : 100;
+    if (!name) throw new Error(`"${part}": missing a name`);
+    if (units < 1 || units > 1000) throw new Error(`"${part}": units must be 1–1000%`);
+    if (!out.some(a => a.name === name)) out.push({ name, units });
+  }
+  return out;
+}
+function parseHours(s) {
+  s = String(s).trim();
+  if (!s || /^off$/i.test(s)) return [];
+  const out = [];
+  for (const p of s.split(/[\s,]+/).filter(Boolean)) {
+    const m = p.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/);
+    if (!m) throw new Error(`"${p}" isn't a time range — use 08:00-12:00`);
+    const a = +m[1] * 60 + +m[2], b = +m[3] * 60 + +m[4];
+    if (b <= a || b > 1440 || +m[2] > 59 || +m[4] > 59) throw new Error(`"${p}" isn't a valid range`);
+    out.push([a, b]);
+  }
+  out.sort((x, y) => x[0] - y[0]);
+  for (let i = 1; i < out.length; i++) if (out[i][0] < out[i - 1][1]) throw new Error('Those working hours overlap');
+  return out;
+}
+function parseRanges(s) {
+  return String(s).split(',').map(x => x.trim()).filter(Boolean).map(p => {
+    const m = p.match(/^(\d{4}-\d{2}-\d{2})(?:\s*\.\.\s*(\d{4}-\d{2}-\d{2}))?$/);
+    if (!m) throw new Error(`"${p}" — use dates like 2026-12-24 or 2026-12-24..2026-12-31`);
+    const a = offOf(m[1]), b = offOf(m[2] || m[1]);
+    if (b < a) throw new Error(`"${p}" ends before it starts`);
+    return [a, b];
+  });
+}
+const rangeStr = (a, b) => a === b ? dateStr(a) : `${dateStr(a)}..${dateStr(b)}`;
+
+/* ---------- tree helpers ---------- */
+function parentsOf(ts) { const st = [], out = []; ts.forEach((t, i) => { while (st.length && ts[st[st.length - 1]].level >= t.level) st.pop(); out[i] = st.length ? st[st.length - 1] : -1; st.push(i); }); return out; }
+function subtreeEnd(ts, i) { let j = i + 1; while (j < ts.length && ts[j].level > ts[i].level) j++; return j; }
+function visibleRows() {
+  const par = parentsOf(D.tasks), hidden = [];
+  D.tasks.forEach((t, i) => { const p = par[i]; hidden[i] = p >= 0 && (hidden[p] || collapsed.has(D.tasks[p].id)); });
+  return D.tasks.map((t, i) => i).filter(i => !hidden[i]);
+}
+function relatives(i) {
+  const par = parentsOf(D.tasks), out = new Set([D.tasks[i].id]);
+  for (let p = par[i]; p >= 0; p = par[p]) out.add(D.tasks[p].id);
+  for (let j = i + 1; j < subtreeEnd(D.tasks, i); j++) out.add(D.tasks[j].id);
+  return out;
+}
+const tIdx = id => D.tasks.findIndex(t => t.id === id);
+const task = id => D.tasks.find(t => t.id === id);
+
+/* ---------- server ---------- */
+async function api(method, url, body) {
+  let r;
+  try { r = await fetch(url, { method, body, headers: { 'X-Rplan-Token': TOKEN, ...(D && method !== 'GET' ? { 'X-Rplan-Rev': D.rev } : {}) } }); }
+  catch (e) { return { ok: false, error: "Can't reach rplan — is it still running?" }; }
+  let j; try { j = await r.json(); } catch (e) { j = { ok: false, error: `Unexpected response (${r.status})` }; }
+  if (r.status === 409) { toast(j.error, 1); await load(); j.handled = true; }
+  return j;
+}
+function accept(j) {
+  D = j; START = ymd(D.start); EXC = new Map();
+  for (const e of D.exceptions) for (let d = e.from; d <= e.to && d <= e.from + 4000; d++) EXC.set(d, e);
+  const ids = new Set(D.tasks.map(t => t.id));
+  sel = new Set([...sel].filter(id => ids.has(id)));
+  if (!ids.has(primary)) primary = sel.size ? [...sel][sel.size - 1] : null;
+  try { collapsed = new Set(JSON.parse(store('collapsed:' + D.path) || '[]')); } catch (e) { collapsed = new Set(); }
+  $('#dl-people').innerHTML = D.resources.map(r => `<option value="${esc(r.name)}">`).join('');
+}
+let firstLoad = true;
+async function load() {
+  const j = await api('GET', '/api/project');
+  if (!j.ok) return toast(j.error, 1);
+  accept(j);
+  if (firstLoad && !dw) { firstLoad = false; return fit(); }
+  firstLoad = false; render();
+}
+function model() {
+  return {
+    name: D.name, start: D.start, currency: D.currency, dayMinutes: D.dayMinutes,
+    week: D.week.map(h => h.map(x => [...x])),
+    exceptions: D.exceptions.map(e => ({ ...e, hours: e.hours.map(x => [...x]) })),
+    resources: D.resources.filter(r => r.declared).map(r => ({ ...r, off: r.off.map(x => [...x]) })),
+    tasks: D.tasks.map(t => ({ id: t.id, name: t.name, level: t.level, dur: t.dur, deps: t.deps.map(d => ({ ...d })), who: t.who.map(a => ({ ...a })), pct: t.pct, constraint: t.constraint ? { ...t.constraint } : null, deadline: t.deadline, fixed: t.fixed, delay: t.delay, base: t.base ? [...t.base] : null, note: t.note })),
+  };
+}
+const mt = (m, id) => m.tasks.find(t => t.id === id);
+function ensureRes(m, name) {
+  let r = m.resources.find(r => r.name === name);
+  if (!r) { const src = D.resources.find(r => r.name === name); r = src ? { ...src, off: src.off.map(x => [...x]) } : { name, rate: 0, capacity: 100, off: [] }; r.declared = true; m.resources.push(r); }
+  return r;
+}
+function toText(m) {
+  const L = [], lines = [];
+  const add = (s, id = null) => { L.push(s); lines.push(id); };
+  add(`project ${cl(m.name) || 'Untitled'}`);
+  add(`start ${m.start}`);
+  if (m.currency && m.currency !== '$') add(`currency ${cl(m.currency)}`);
+  m.week.forEach((h, i) => add(`week ${DOW[i]} ${hoursStr(h)}`));
+  add(`dayhours ${+(m.dayMinutes / 60).toFixed(4)}`);
+  for (const e of m.exceptions) add(e.hours.length ? `workday ${rangeStr(e.from, e.to)} ${hoursStr(e.hours)} ${cl(e.name)}`.trim() : `holiday ${rangeStr(e.from, e.to)} ${cl(e.name)}`.trim());
+  for (const r of m.resources) add(`resource ${rn(r.name)} | rate ${+r.rate || 0} | capacity ${r.capacity || 100}${r.off.length ? ' | off ' + r.off.map(([a, b]) => rangeStr(a, b)).join(', ') : ''}`);
+  for (const t of m.tasks) {
+    const at = [];
+    if (t.constraint) at.push(`${t.constraint.type}=${dtStr(t.constraint.at)}`);
+    if (t.deadline != null) at.push(`deadline=${dateStr(t.deadline)}`);
+    if (+t.fixed) at.push(`cost=${+t.fixed}`);
+    if (t.delay > 0) at.push(`delay=${t.delay}m`);
+    if (t.base) at.push(`base=${dtStr(t.base[0])}/${dtStr(t.base[1])}`);
+    if (t.note) at.push(`note=${cl(t.note)}`);
+    const deps = t.deps.map(d => `${d.id}${d.kind}${d.lag ? (d.lag > 0 ? '+' : '-') + Math.abs(d.lag) + 'm' : ''}`).join(',');
+    const who = t.who.map(a => a.units === 100 ? rn(a.name) : `${rn(a.name)}[${a.units}%]`).join(',');
+    add(`${'  '.repeat(Math.max(0, t.level))}task ${t.id} | ${cl(t.name) || 'New task'} | ${Math.max(0, Math.round(t.dur))}m | ${deps} | ${who} | ${t.pct}${at.length ? ' | ' + at.join('; ') : ''}`, t.id);
+  }
+  return { text: L.join('\n') + '\n', lines };
+}
+function friendly(err, lines) { const m = /^line (\d+): ([\s\S]*)$/.exec(err || ''); if (m) { const id = lines[+m[1] - 1]; return id ? `Task #${id}: ${m[2]}` : m[2]; } return err; }
+// Every change to the file goes through one queue, so saves never overlap.
+function enqueue(fn) { const p = chain.then(fn); chain = p.catch(() => {}); return p; }
+function commit(fn, msg) { return enqueue(() => doCommit(fn, msg)); }
+async function doCommit(fn, msg) {
+  const m = model();
+  let r;
+  try { r = fn(m); } catch (e) { toast(e.message, 1); render(); return false; }
+  if (r === false) { render(); return false; }
+  const { text, lines } = toText(m);
+  const prev = D.text, j = await api('POST', '/api/save', text);
+  if (!j.ok) { if (!j.handled) toast(friendly(j.error, lines), 1); render(); return false; }
+  if (j.text !== prev) { undo.push(prev); if (undo.length > 300) undo.shift(); redo = []; }
+  accept(j); render(); saved();
+  const note = typeof msg === 'function' ? msg(j) : msg;
+  if (note) toast(note);
+  return true;
+}
+function action(url, confirmMsg) {
+  if (confirmMsg && !confirm(confirmMsg)) return;
+  return enqueue(async () => {
+    const prev = D.text, j = await api('POST', url);
+    if (!j.ok) { if (!j.handled) toast(j.error, 1); return; }
+    if (j.text !== prev) { undo.push(prev); redo = []; }
+    accept(j); render(); saved(); if (j.note) toast(j.note);
+  });
+}
+function restore(from, to, msg) {
+  return enqueue(async () => {
+    if (!from.length) return toast(msg === 'Undone' ? 'Nothing to undo' : 'Nothing to redo');
+    const text = from.pop(), cur = D.text, j = await api('POST', '/api/save', text);
+    if (!j.ok) { from.push(text); if (!j.handled) toast(j.error, 1); return; }
+    to.push(cur); accept(j); render(); saved(); toast(msg);
+  });
+}
+const doUndo = () => restore(undo, redo, 'Undone');
+const doRedo = () => restore(redo, undo, 'Redone');
+
+/* ---------- render ---------- */
+function focusSel(el) {
+  if (!el || !el.dataset) return null;
+  const keys = ['id', 'f', 'insp', 'k', 'cal', 'd', 'res', 'name'].filter(k => el.dataset[k] !== undefined);
+  if (!keys.length) return null;
+  return keys.map(k => `[data-${k}="${CSS.escape(el.dataset[k])}"]`).join('');
+}
+function render() {
+  if (!D) return;
+  const a = document.activeElement, fsel = focusSel(a);
+  const fval = a && 'value' in a ? a.value : null, fs = a && a.selectionStart, fe = a && a.selectionEnd;
+  const v = $('#main .view'), scroll = v ? [v.dataset.v, v.scrollLeft, v.scrollTop] : null, iscroll = $('#insp').scrollTop;
+  document.title = `${D.name} · rplan`;
+  if (document.activeElement !== $('#pname')) $('#pname').value = D.name;
+  $('#pstart').value = D.start;
+  $('#fpath').textContent = D.path;
+  $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
+  renderToolbar(); renderKpis();
+  $('#main').innerHTML = view === 'gantt' ? gantt() : view === 'network' ? network() : people();
+  const nv = $('#main .view');
+  if (scroll && nv && nv.dataset.v === scroll[0]) { nv.scrollLeft = scroll[1]; nv.scrollTop = scroll[2]; }
+  inspector(); $('#insp').scrollTop = iscroll;
+  if (dlgKind && $('#dlg').open) renderDialog();
+  if (fsel) {
+    const el = document.querySelector(fsel);
+    if (el && el !== document.activeElement) {
+      el.focus();
+      if (fval != null && el.value !== fval && el.type !== 'checkbox' && el.tagName !== 'SELECT') el.value = fval;
+      try { if (fs != null) el.setSelectionRange(fs, fe); } catch (e) {}
+    }
+  }
+}
+
+function renderToolbar() {
+  const hasBase = D.tasks.some(t => t.base), leveled = D.tasks.some(t => t.delay > 0), n = sel.size;
+  $('#toolbar').innerHTML = `
+    <button class="btn primary" data-act="add" title="New task (N)">${ic('plus')}Task</button>
+    <button class="btn icon" data-act="outdent" title="Outdent (Shift+Tab)" ${n ? '' : 'disabled'}>${ic('out')}</button>
+    <button class="btn icon" data-act="indent" title="Indent — make a subtask (Tab)" ${n ? '' : 'disabled'}>${ic('ind')}</button>
+    <span class="sep"></span>
+    <button class="btn icon" data-act="undo" title="Undo (Ctrl+Z)" ${undo.length ? '' : 'disabled'}>${ic('undo')}</button>
+    <button class="btn icon" data-act="redo" title="Redo (Ctrl+Y)" ${redo.length ? '' : 'disabled'}>${ic('redo')}</button>
+    <span class="sep"></span>
+    <button class="btn icon" data-act="zout" title="Zoom out (-)">${ic('zout')}</button>
+    <button class="btn icon" data-act="zin" title="Zoom in (+)">${ic('zin')}</button>
+    <button class="btn icon" data-act="fit" title="Fit to window (F)">${ic('fit')}</button>
+    <button class="btn icon hide-m" data-act="table" title="${tableMode === 'full' ? 'Compact table' : 'Full table'}">${ic('table')}</button>
+    <span class="sep"></span>
+    <button class="btn ${focusCrit ? 'on' : ''}" data-act="crit" title="Fade everything off the critical path (C)">${ic('fire')}<span class="hide-m">Critical path</span></button>
+    <button class="btn" data-menu="level">${ic('level')}<span class="hide-m">Level</span>${leveled ? ' <span class="chip y">on</span>' : ''}<span class="caret">▾</span></button>
+    <button class="btn" data-menu="baseline">${ic('base')}<span class="hide-m">Baseline</span>${hasBase ? ' <span class="chip n">set</span>' : ''}<span class="caret">▾</span></button>
+    <button class="btn" data-act="calendar" title="Working days, hours and holidays">${ic('cal')}<span class="hide-m">Calendar</span></button>
+    <span class="grow"></span>
+    <button class="btn" data-act="import" title="Import ProjectLibre / MS Project XML">${ic('up')}<span class="hide-m">Import</span></button>
+    <button class="btn" data-menu="export">${ic('dl')}<span class="hide-m">Export</span><span class="caret">▾</span></button>
+    <button class="btn icon" data-act="details" title="Details panel (Enter)" style="${inspOpen ? 'color:var(--acc);border-color:var(--acc)' : ''}">${ic('side')}</button>`;
+}
+
+function renderKpis() {
+  const leaves = D.tasks.filter(t => !t.summary), now = nowRel();
+  const over = D.loads.filter(l => l.over > 0), crit = leaves.filter(t => t.crit).length;
+  const late = D.tasks.filter(t => t.late).length, conflict = leaves.filter(t => t.conflict).length;
+  const behind = leaves.filter(t => behindOf(t, now)).length;
+  const based = D.tasks.filter(t => t.base);
+  let slip = '';
+  if (based.length) {
+    const bf = Math.max(...based.map(t => t.base[1])), a = Math.floor((bf - 1) / 1440), b = Math.floor((D.finish - 1) / 1440);
+    const s = a <= b ? workDays(a + 1, b) : -workDays(b + 1, a);
+    slip = `<div class="kpi ${s > 0 ? 'warn' : 'good'}" title="Finish compared with the saved baseline"><span>vs baseline</span><b>${s > 0 ? '+' + s + 'd late' : s < 0 ? -s + 'd early' : 'on time'}</b></div>`;
+  }
+  $('#kpis').innerHTML = `
+    <div class="kpi"><span>Finish</span><b>${D.tasks.length ? nice(Math.floor((D.finish - 1) / 1440)) : '—'}</b></div>
+    <div class="kpi"><span>Duration</span><b>${fmtDays(D.span)} <small>work</small></b></div>
+    <div class="kpi" style="min-width:150px"><span>Progress</span><b>${(+D.progress).toFixed(0)}%</b><div class="pbar"><div style="width:${D.progress}%"></div></div></div>
+    <div class="kpi"><span>Cost</span><b>${money(D.cost)}</b></div>
+    <div class="kpi"><span>Tasks</span><b>${leaves.length}</b></div>
+    <div class="kpi ${crit ? 'warn' : ''}"><span>Critical</span><b>${crit}</b></div>
+    <div class="kpi ${over.length ? 'warn' : 'good'}" title="${esc(over.map(l => l.name).join(', '))}"><span>Over-allocated</span><b>${over.length ? over.length + (over.length > 1 ? ' people' : ' person') : 'None ✓'}</b></div>
+    ${late ? `<div class="kpi warn" title="Tasks finishing after their deadline"><span>Past deadline</span><b>${late}</b></div>` : ''}
+    ${behind ? `<div class="kpi amber" title="Less done than expected for today"><span>Behind</span><b>${behind}</b></div>` : ''}
+    ${conflict ? `<div class="kpi amber" title="A 'must start on' date clashes with predecessors"><span>Conflicts</span><b>${conflict}</b></div>` : ''}
+    ${slip}`;
+}
+function behindOf(t, now) { if (t.summary || t.dur === 0 || t.pct >= 100 || now <= t.es) return false; const exp = Math.min(1, (now - t.es) / Math.max(1, t.ef - t.es)) * 100; return t.pct + 10 < exp; }
+
+function colsDef() {
+  const full = tableMode === 'full';
+  const c = [['num', '#', 50]];
+  if (full) c.push(['wbs', 'WBS', 44]);
+  c.push(['name', 'Task', full ? 230 : 210], ['dur', 'Dur', 58]);
+  if (full) c.push(['start', 'Start', 92], ['finish', 'Finish', 92]);
+  c.push(['deps', 'After', 78], ['who', 'Who', full ? 100 : 92], ['pct', 'Done', 54]);
+  if (full && D.tasks.some(t => t.cost > 0)) c.push(['cost', 'Cost', 74]);
+  if (full && D.tasks.some(t => t.base)) c.push(['slip', 'Slip', 56]);
+  c.push(['del', '', 30]);
+  return c;
+}
+const X = m => (m / 1440 + PAD) * dw;
+function spanDays(gw) {
+  const last = Math.max(D.finish, ...D.tasks.map(t => Math.max(t.lf, t.base ? t.base[1] : 0, t.deadline != null ? (t.deadline + 1) * 1440 : 0)));
+  return Math.max(Math.ceil(last / 1440) + 10, Math.ceil((innerWidth - gw - inspW()) / dw) - PAD);
+}
+function timeHeader(days) {
+  let months = '', cur = null, w = 0, label = '', cells = '';
+  const td = todayOff();
+  for (let o = -PAD; o < days; o++) {
+    const d = dateOf(o), key = d.getUTCFullYear() * 12 + d.getUTCMonth();
+    if (key !== cur) { if (cur !== null) months += `<div style="width:${w}px">${label}</div>`; cur = key; w = 0; label = `${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}`; }
+    w += dw;
+    const wd = d.getUTCDay(), off = isOff(o), ex = EXC.get(o);
+    const cls = [off && !ex ? 'we' : '', ex && !ex.hours.length ? 'hol' : '', ex && ex.hours.length ? 'xw' : '', o === td ? 'today' : ''].join(' ');
+    const txt = dw >= 20 ? d.getUTCDate() : (wd === 1 ? `<span style="position:relative;left:${dw}px">${d.getUTCDate()}</span>` : '');
+    const title = `${nice(o)}${ex ? ' — ' + (ex.name || (ex.hours.length ? 'working day' : 'holiday')) : ''}\n${off ? 'Day off' : hoursStr(dayHours(o))}\nClick to ${off ? 'make it a working day' : 'mark it as a holiday'}`;
+    cells += `<div class="${cls}" style="width:${dw}px" data-day="${o}" title="${esc(title)}">${txt}</div>`;
+  }
+  months += `<div style="width:${w}px">${label}</div>`;
+  return `<div class="months">${months}</div><div class="days">${cells}</div>`;
+}
+function dayStripes(days) {
+  let bg = '';
+  for (let o = -PAD; o < days; o++) if (isOff(o)) bg += `<div class="stripe ${EXC.has(o) ? 'hol' : ''}" style="left:${X(o * 1440)}px;width:${dw}px"></div>`;
+  const td = todayOff(); if (td >= -PAD && td < days) bg += `<div class="todayl" style="left:${X(nowRel())}px" title="Now"></div>`;
+  return bg;
+}
+const mmdd = d => `${String(dateOf(d).getUTCMonth() + 1).padStart(2, '0')}/${String(dateOf(d).getUTCDate()).padStart(2, '0')}`;
+function dateCell(t, end) {
+  const m = t.summary || t.dur > 0 ? (end ? t.ef : t.es) : t.es;
+  const isEnd = end && (t.summary || t.dur > 0), d = Math.floor((isEnd ? m - 1 : m) / 1440), full = when(m, isEnd), time = full.split(' ')[3];
+  return `<div class="date" title="${esc(full)}">${mmdd(d)} <i>${DOW[wdOf(d)]}${time ? ' ' + time : ''}</i></div>`;
+}
+
+function gantt() {
+  const cols = colsDef(), GW = cols.reduce((a, c) => a + c[2], 0), tmpl = cols.map(c => c[2] + 'px').join(' ');
+  const days = spanDays(GW), W = (days + PAD) * dw, vis = visibleRows(), H = (vis.length + 1) * RH;
+  let rows = '', bars = '', links = '', bg = dayStripes(days);
+  const geo = new Map();
+  vis.forEach((i, r) => {
+    const t = D.tasks[i], y = r * RH, ms = !t.summary && t.dur === 0, c = t.crit ? 'c' : '';
+    if (sel.has(t.id)) bg += `<div class="selband" style="top:${y}px"></div>`;
+    const badges = [
+      t.constraint ? `<span class="badge" title="${esc(consLabel(t.constraint))}">📌</span>` : '',
+      t.deadline != null ? `<span class="badge" title="Deadline ${nice(t.deadline)}${t.late ? ' — will be late!' : ''}">${t.late ? '⚠️' : '⏰'}</span>` : '',
+      t.delay > 0 ? `<span class="badge" title="Delayed ${fmtDur(t.delay)} by leveling">⏸</span>` : '',
+      t.conflict ? `<span class="badge" title="Must-start date clashes with predecessors">⚠️</span>` : '',
+      t.note ? `<span class="badge" title="${esc(t.note)}">📝</span>` : '',
+    ].join('');
+    const cell = {
+      num: `<div class="num" draggable="true" data-drag="${t.id}" title="Drag to reorder">${t.id}</div>`,
+      wbs: `<div class="wbs">${t.wbs}</div>`,
+      name: `<div class="nm" style="padding-left:${t.level * 16}px">${t.summary ? `<button class="chev ${collapsed.has(t.id) ? 'closed' : ''}" data-act="toggle" data-id="${t.id}" title="Collapse / expand">${ic('chev')}</button>` : '<span class="chev-sp"></span>'}<span class="dot ${t.summary ? 's' : ms ? 'm' : c}"></span><input data-id="${t.id}" data-f="name" value="${esc(t.name)}" spellcheck="false" aria-label="Task name">${badges}</div>`,
+      dur: `<div><input data-id="${t.id}" data-f="dur" value="${t.summary ? fmtDays(t.span) : fmtDur(t.dur)}" ${t.summary ? 'disabled title="Summary: from its subtasks"' : 'title="3d, 4h, 30m, 2w — 0 = milestone"'}></div>`,
+      start: dateCell(t, false), finish: dateCell(t, true),
+      deps: `<div><input data-id="${t.id}" data-f="deps" value="${esc(depsStr(t))}" placeholder="—" title="Predecessors: 2, 3SS, 4FF+1d"></div>`,
+      who: `<div><input data-id="${t.id}" data-f="who" value="${esc(whoStr(t))}" placeholder="—" ${t.summary ? 'disabled' : 'list="dl-people"'} title="People, e.g. Ana, Bo[50%]"></div>`,
+      pct: `<div class="pct"><input data-id="${t.id}" data-f="pct" value="${Math.round(t.summary ? t.pctR : t.pct)}%" ${t.summary ? 'disabled' : ''} title="% complete"><div class="mini"><div style="width:${t.summary ? t.pctR : t.pct}%"></div></div></div>`,
+      cost: `<div class="money">${t.cost ? money(t.cost) : '—'}</div>`,
+      slip: `<div class="slipc ${t.slip > 0 ? 'bad' : t.slip < 0 ? 'goodc' : ''}" title="Finish vs baseline">${t.slip == null ? '—' : t.slip === 0 ? '0' : (t.slip > 0 ? '+' : '') + fmtDays(t.slip)}</div>`,
+      del: `<div><button class="del" data-act="del" data-id="${t.id}" title="Delete task">${ic('trash')}</button></div>`,
+    };
+    rows += `<div class="row cols ${sel.has(t.id) ? 'sel' : ''} ${c ? 'crit' : ''} ${t.summary ? 'sum' : ''}" data-row="${t.id}">${cols.map(c => cell[c[0]]).join('')}</div>`;
+
+    const tip = `data-tip="${t.id}"`, x1 = X(t.es), x2 = Math.max(X(t.ef), x1 + 3);
+    if (t.summary) {
+      bars += `<div class="sbar ${c}" style="left:${x1}px;top:${y + 11}px;width:${x2 - x1}px" data-bar="${t.id}" ${tip}><div class="sprog" style="width:${t.pctR}%"></div><span class="lab">${Math.round(t.pctR)}%${t.cost ? ' · ' + money(t.cost) : ''}</span><span class="hl" data-link="${t.id}"></span></div>`;
+      geo.set(t.id, { x1, x2, y: y + 15, t });
+    } else if (ms) {
+      bars += `<div class="ms ${c}" style="left:${x1 - 8}px;top:${y + 10}px" data-bar="${t.id}" data-move="${t.id}" ${tip}><span class="lab">${esc(t.name)} · ${nice(Math.floor(t.es / 1440))}</span><span class="hl" data-link="${t.id}"></span></div>`;
+      geo.set(t.id, { x1: x1 - 9, x2: x1 + 9, y: y + 18, t });
+    } else {
+      const w = x2 - x1, warn = t.late ? ' · <span class="w">⚠ past deadline</span>' : t.delay ? ` · <span class="w">⏸ leveled +${fmtDur(t.delay)}</span>` : '';
+      bars += `<div class="bar ${c} ${t.late ? 'late' : ''}" style="left:${x1}px;top:${y + 7}px;width:${w}px" data-bar="${t.id}" data-move="${t.id}" ${tip}>
+        ${t.constraint ? '<span class="pin">📌</span>' : ''}<div class="prog ${t.pct >= 100 ? 'full' : ''}" style="width:${t.pct}%"></div>
+        ${w > 70 ? `<span class="in">${esc(t.name)}</span>` : ''}
+        <span class="lab">${t.who.length ? `<b>${esc(whoStr(t))}</b> · ` : ''}${t.pct}%${t.slack > 0 ? ` · ${fmtDays(t.slack)} slack` : ''}${warn}</span>
+        <span class="hr" data-resize="${t.id}"></span><span class="hl" data-link="${t.id}"></span></div>`;
+      if (t.slack > 0 && X(t.lf) > x2 + 4) bars += `<div class="float" style="left:${x2 + 3}px;top:${y + 32}px;width:${X(t.lf) - x2 - 3}px" title="Slack"></div>`;
+      geo.set(t.id, { x1, x2, y: y + 17, t });
+    }
+    if (t.base) bars += `<div class="base" style="left:${X(t.base[0])}px;top:${y + 29}px;width:${Math.max(X(t.base[1]) - X(t.base[0]), 2)}px" title="Baseline: ${esc(when(t.base[0]))} → ${esc(when(t.base[1], true))}"></div>`;
+    if (t.deadline != null) bars += `<div class="dl ${t.late ? '' : 'ok'}" style="left:${X((t.deadline + 1) * 1440) - 6}px;top:${y + 1}px" title="Deadline: ${nice(t.deadline)}${t.late ? ' — this task will be late' : ''}"></div>`;
+  });
+  for (const t of D.tasks) for (const d of t.deps) {
+    const a = geo.get(d.id), b = geo.get(t.id); if (!a || !b) continue;
+    const fromEnd = d.kind === 'FS' || d.kind === 'FF', toStart = d.kind === 'FS' || d.kind === 'SS';
+    const x1 = fromEnd ? a.x2 : a.x1, x2 = toStart ? b.x1 : b.x2, ax = x1 + (fromEnd ? 8 : -8), end = x2 + (toStart ? -1 : 1);
+    let p;
+    if ((toStart && ax <= x2 - 4) || (!toStart && ax >= x2 + 4)) p = `M${x1},${a.y} H${ax} V${b.y} H${end}`;
+    else { const my = a.y + (b.y > a.y ? RH / 2 : -RH / 2), bx = x2 + (toStart ? -10 : 10); p = `M${x1},${a.y} H${ax} V${my} H${bx} V${b.y} H${end}`; }
+    const c = a.t.crit && b.t.crit ? 'c' : '';
+    links += `<path class="lnk ${c}" d="${p}" marker-end="url(#ar${c})"><title>#${d.id} → #${t.id} (${KIND[d.kind]}${d.lag ? ', ' + (d.lag > 0 ? '+' : '-') + fmtDur(Math.abs(d.lag)) : ''})</title></path>`;
+  }
+  const after = primary != null && task(primary) ? task(primary) : null;
+  rows += `<div class="row cols add" style="--cols:${cols[0][2]}px 1fr"><div class="num">+</div><div class="nm"><input data-id="0" data-f="new" placeholder="Add a task… type a name and press Enter${after ? ` (goes after #${after.id}${after.summary ? '' : ', linked to it'})` : ''} — or paste rows from Excel"></div></div>`;
+  if (!D.tasks.length) bars += `<div class="empty" style="position:absolute;left:${X(0)}px;top:40px">No tasks yet — add one on the left, or import a ProjectLibre / MS Project file.</div>`;
+  return `<div class="view ${focusCrit ? 'dim' : ''}" data-v="gantt"><div class="gt" style="--gw:${GW}px;--cols:${tmpl};--rh:${RH}px">
+    <div class="corner"><div class="cols">${cols.map(c => `<div>${c[1]}</div>`).join('')}</div></div>
+    <div class="thead" style="width:${W}px">${timeHeader(days)}</div>
+    <div class="gridl">${rows}</div>
+    <div class="tbody" id="tbody" style="width:${W}px;height:${H}px;background:repeating-linear-gradient(to bottom,transparent 0 ${RH - 1}px,var(--line2) ${RH - 1}px ${RH}px)">
+      ${bg}
+      <svg class="links" id="links" width="${W}" height="${H}"><defs>
+        <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="var(--dim)"/></marker>
+        <marker id="arc" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="var(--cr1)"/></marker>
+      </defs>${links}</svg>
+      ${bars}
+    </div></div></div>`;
+}
+function consLabel(c) { if (!c) return 'As soon as possible'; const d = when(c.at); return { snet: `Start no earlier than ${d}`, fnet: `Finish no earlier than ${d}`, mso: `Must start on ${d}` }[c.type]; }
+
+function network() {
+  const par = parentsOf(D.tasks), byId = new Map(D.tasks.map((t, i) => [t.id, i]));
+  const leavesOf = i => { const out = []; for (let j = i; j < subtreeEnd(D.tasks, i); j++) if (!D.tasks[j].summary) out.push(j); return out; };
+  const edges = [];
+  D.tasks.forEach((t, i) => {
+    if (t.summary) return;
+    const deps = []; for (let a = i; a >= 0; a = par[a]) deps.push(...D.tasks[a].deps);
+    for (const d of deps) {
+      const pi = byId.get(d.id); if (pi == null) continue;
+      let srcs = D.tasks[pi].summary ? leavesOf(pi) : [pi];
+      if (D.tasks[pi].summary && srcs.length) { const st = d.kind === 'SS' || d.kind === 'SF'; const key = j => st ? D.tasks[j].es : D.tasks[j].ef; const best = st ? Math.min(...srcs.map(key)) : Math.max(...srcs.map(key)); srcs = [srcs.find(j => key(j) === best)]; }
+      for (const s of srcs) edges.push({ from: s, to: i, d });
+    }
+  });
+  const leaves = D.tasks.map((t, i) => i).filter(i => !D.tasks[i].summary), lvl = new Map();
+  const into = new Map(leaves.map(i => [i, []])); edges.forEach(e => into.get(e.to)?.push(e.from));
+  const L = i => { if (lvl.has(i)) return lvl.get(i); lvl.set(i, 0); const v = into.get(i).length ? 1 + Math.max(...into.get(i).map(L)) : 0; lvl.set(i, v); return v; };
+  leaves.forEach(L);
+  const cols = new Map(), pos = new Map(); let W = 0, H = 0;
+  for (const i of leaves) { const l = lvl.get(i); if (!cols.has(l)) cols.set(l, []); cols.get(l).push(i); }
+  for (const [l, is] of cols) is.forEach((i, r) => { const x = 40 + l * 270, y = 40 + r * 168; pos.set(i, { x, y }); W = Math.max(W, x + 260); H = Math.max(H, y + 168); });
+  let nodes = '', es = '';
+  for (const i of leaves) {
+    const t = D.tasks[i], { x, y } = pos.get(i), grp = par[i] >= 0 ? D.tasks[par[i]].name : '';
+    nodes += `<div class="node ${t.crit ? 'c' : ''} ${sel.has(t.id) ? 'sel' : ''}" style="left:${x}px;top:${y}px" data-node="${t.id}">
+      <h4><span class="dot ${t.dur === 0 ? 'm' : t.crit ? 'c' : ''}"></span><small>#${t.id}</small>${esc(t.name)}</h4>${grp ? `<div class="grp">${esc(grp)}</div>` : ''}
+      <div class="g"><span>Start</span><span>Finish</span><b>${nice(sDay(t))}</b><b>${nice(fDay(t))}</b>
+      <span>Duration</span><span>Slack</span><b>${t.dur ? fmtDur(t.dur) : 'milestone'}</b><b style="color:${t.slack > 0 ? 'var(--fg)' : 'var(--cr1)'}">${fmtDays(t.slack)}</b></div>
+      <div class="g" style="margin-top:4px"><span>${esc(whoStr(t) || 'Unassigned')}</span><span style="text-align:right">${t.pct}%</span></div>
+      <div class="pb"><div style="width:${t.pct}%"></div></div></div>`;
+  }
+  for (const e of edges) {
+    const a = pos.get(e.from), b = pos.get(e.to); if (!a || !b) continue;
+    const s = D.tasks[e.from], t = D.tasks[e.to], c = s.crit && t.crit ? 'c' : '';
+    const x1 = a.x + 210, y1 = a.y + 55, x2 = b.x - 4, y2 = b.y + 55, mx = (x1 + x2) / 2;
+    es += `<path class="nedge ${c}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" marker-end="url(#n${c})"/>`;
+    const lab = (e.d.kind !== 'FS' ? e.d.kind : '') + (e.d.lag ? (e.d.lag > 0 ? '+' : '-') + fmtDur(Math.abs(e.d.lag)) : '');
+    if (lab) es += `<text x="${mx}" y="${(y1 + y2) / 2 - 6}" fill="var(--mut)" font-size="11" text-anchor="middle">${lab}</text>`;
+  }
+  return `<div class="view" data-v="network"><div class="net" style="width:${W + 40}px;height:${H + 40}px">
+    <svg width="${W + 40}" height="${H + 40}" style="position:absolute;left:0;top:0"><defs>
+      <marker id="n" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="var(--dim)"/></marker>
+      <marker id="nc" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="var(--cr1)"/></marker>
+    </defs>${es}</svg>${nodes || '<div class="empty">No tasks yet.</div>'}</div></div>`;
+}
+
+function people() {
+  const GW = 640, days = spanDays(GW), W = (days + PAD) * dw, loads = new Map(D.loads.map(l => [l.name, l]));
+  const ppl = D.resources, bad = D.loads.filter(l => l.over > 0), leveled = D.tasks.some(t => t.delay > 0);
+  let rows = '', cells = '', bg = dayStripes(days);
+  const tmpl = '190px 70px 74px 1fr 150px 30px';
+  ppl.forEach((p, i) => {
+    const l = loads.get(p.name) || { work: 0, cost: 0, tasks: 0, over: 0, days: [] }, h = [...p.name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 0), y = i * RRH;
+    rows += `<div class="row cols" style="--cols:${tmpl}">
+      <div class="who"><div class="av" style="background:linear-gradient(135deg,hsl(${h} 70% 55%),hsl(${(h + 40) % 360} 70% 45%))">${esc(p.name.slice(0, 2).toUpperCase())}</div><input data-res="name" data-name="${esc(p.name)}" value="${esc(p.name)}" aria-label="Name"></div>
+      <div><input data-res="rate" data-name="${esc(p.name)}" value="${p.rate || ''}" placeholder="0" title="Cost per hour (${esc(D.currency)})"></div>
+      <div><input data-res="capacity" data-name="${esc(p.name)}" value="${p.capacity}%" title="Max units — 50% = half time"></div>
+      <div><input data-res="off" data-name="${esc(p.name)}" value="${esc(p.off.map(([a, b]) => rangeStr(a, b)).join(', '))}" placeholder="Days off: 2026-12-24..2026-12-31" title="Personal days off (comma-separated dates or ranges)"></div>
+      <div class="meta"><b>${fmtDays(l.work)}</b> · ${l.tasks} task${l.tasks === 1 ? '' : 's'} · ${money(l.cost)}${l.over ? `<br><span class="bad">${l.over}d over capacity</span>` : ''}</div>
+      <div><button class="del" data-act="res-rm" data-name="${esc(p.name)}" title="Remove person">${ic('trash')}</button></div></div>`;
+    for (const [a, b] of p.off) cells += `<div class="poff" style="left:${X(a * 1440)}px;top:${y}px;width:${(b - a + 1) * dw}px" title="${esc(p.name)} is off"></div>`;
+    for (const [d, u, ids] of l.days) {
+      const names = ids.map(id => '#' + id + ' ' + (task(id)?.name || '')).join('\n'), over = u > p.capacity;
+      cells += `<div class="cell ${over ? 'over' : ''}" style="left:${X(d * 1440) + 1}px;width:${dw - 2}px;top:${y + 12}px;--a:${Math.min(u / p.capacity, 1)}" title="${esc(p.name)} · ${nice(d)} · ${u}% of ${p.capacity}%\n${esc(names)}">${dw >= 22 ? u + '' : ''}</div>`;
+    }
+  });
+  rows += `<div class="row cols add" style="--cols:${tmpl}"><div class="who" style="grid-column:span 4"><div class="av" style="background:var(--panel3);color:var(--mut)">+</div><input data-res="new" data-name="" placeholder="Add a person… (name, then Enter)"></div></div>`;
+  const banner = !ppl.length ? `<div class="banner">Assign people in the Gantt's <b>Who</b> column (or add them below) to see their workload here.</div>`
+    : bad.length ? `<div class="banner bad">⚠ <div><b>${bad.map(l => esc(l.name)).join(', ')}</b> ${bad.length > 1 ? 'are' : 'is'} booked beyond capacity.<br><small style="color:var(--mut)">Leveling delays the most flexible clashing tasks, choosing whatever moves the finish date least. It adds no links and can be undone.</small></div><div class="acts">${leveled ? `<button class="btn" data-act="unlevel">Clear leveling</button>` : ''}<button class="btn primary" data-act="level">${ic('level')}Level resources</button></div></div>`
+    : `<div class="banner ok">✓ Nobody is booked beyond their capacity.${leveled ? `<div class="acts"><button class="btn" data-act="unlevel">Clear leveling</button></div>` : ''}</div>`;
+  return `<div class="view" data-v="resources">${banner}
+    <div class="gt res" style="--gw:${GW}px;--rh:${RRH}px">
+      <div class="corner"><div class="cols" style="--cols:${tmpl}"><div style="padding-left:46px">Person</div><div>Rate/h</div><div>Capacity</div><div>Days off</div><div>Workload</div><div></div></div></div>
+      <div class="thead" style="width:${W}px">${timeHeader(days)}</div>
+      <div class="gridl">${rows}</div>
+      <div class="tbody" style="width:${W}px;height:${(ppl.length + 1) * RRH}px;background:repeating-linear-gradient(to bottom,transparent 0 ${RRH - 1}px,var(--line2) ${RRH - 1}px ${RRH}px)">${bg}${cells}</div>
+    </div></div>`;
+}
+
+function inspector() {
+  const el = $('#insp'); el.hidden = !inspW(); if (el.hidden) return;
+  const head = (title) => `<div class="ih">${title}<button class="x" data-act="details" title="Close">×</button></div>`;
+  if (sel.size > 1) {
+    el.innerHTML = head(`<b>${sel.size} tasks selected</b>`) + `
+      <div class="isec"><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" data-act="outdent">${ic('out')}Outdent</button><button class="btn sm" data-act="indent">${ic('ind')}Indent</button><button class="btn sm" data-act="link-chain">Link in order</button><button class="btn sm danger" data-act="del-sel">${ic('trash')}Delete</button></div></div>
+      <div class="isec"><h5>Assign to all selected</h5><input class="wide" data-insp="bulk-who" list="dl-people" placeholder="e.g. Ana, Bo[50%] — Enter to apply"></div>
+      <div class="isec"><h5>Set % done for all</h5><input class="wide" data-insp="bulk-pct" placeholder="0–100"></div>
+      <div class="isec"><span class="hint">Tip: Ctrl+C copies the selected rows (paste into a spreadsheet or back here). Shift+click selects a range.</span></div>`;
+    return;
+  }
+  const t = primary != null ? task(primary) : null;
+  if (!t) { el.hidden = true; return; }
+  const i = tIdx(t.id), rel = relatives(i), others = D.tasks.filter(x => !rel.has(x.id));
+  const chips = [
+    t.summary ? '<span class="chip n">Summary</span>' : t.dur === 0 ? '<span class="chip y">Milestone</span>' : '',
+    t.crit ? '<span class="chip r">Critical</span>' : `<span class="chip">${fmtDays(t.slack)} slack</span>`,
+    t.late ? '<span class="chip r">Past deadline</span>' : '', t.conflict ? '<span class="chip y">Constraint conflict</span>' : '',
+    t.delay ? `<span class="chip y">Leveled +${fmtDur(t.delay)}</span>` : '', behindOf(t, nowRel()) ? '<span class="chip y">Behind</span>' : '',
+    t.pct >= 100 && !t.summary ? '<span class="chip g">Done</span>' : '',
+  ].join('');
+  const deps = t.deps.map((d, k) => `<div class="deprow">
+      <select data-insp="dep-id" data-k="${k}" title="Predecessor">${(others.some(o => o.id === d.id) ? others : [task(d.id) || { id: d.id, name: '?' }, ...others]).map(o => `<option value="${o.id}" ${o.id === d.id ? 'selected' : ''}>#${o.id} ${esc(o.name)}</option>`).join('')}</select>
+      <select data-insp="dep-kind" data-k="${k}" title="${esc(KIND[d.kind])}">${Object.keys(KIND).map(kd => `<option value="${kd}" ${kd === d.kind ? 'selected' : ''} title="${KIND[kd]}">${kd}</option>`).join('')}</select>
+      <input data-insp="dep-lag" data-k="${k}" value="${d.lag ? (d.lag > 0 ? '+' : '-') + fmtDur(Math.abs(d.lag)) : ''}" placeholder="lag" title="Lag (+2d) or lead (-4h)">
+      <button class="rm" data-act="dep-rm" data-k="${k}" title="Remove link">×</button></div>`).join('');
+  const who = t.who.map((a, k) => `<div class="whorow"><input data-insp="who-name" data-k="${k}" value="${esc(a.name)}" list="dl-people"><input data-insp="who-units" data-k="${k}" value="${a.units}%" title="Share of their time"><button class="rm" data-act="who-rm" data-k="${k}" title="Unassign">×</button></div>`).join('');
+  const res = t.who.map(a => { const r = D.resources.find(r => r.name === a.name); return r && r.rate ? `${esc(a.name)}: ${money(r.rate * a.units / 100 * t.dur / 60)}` : ''; }).filter(Boolean).join(' · ');
+  const ctype = t.constraint ? t.constraint.type : 'asap';
+  el.innerHTML = head(`<span class="dot ${t.summary ? 's' : t.dur === 0 ? 'm' : t.crit ? 'c' : ''}"></span><small>#${t.id} · WBS ${t.wbs}</small>`) + `
+    <input class="iname" data-insp="name" value="${esc(t.name)}" aria-label="Task name">
+    <div class="chips">${chips}</div>
+    <div class="isec"><div class="g2">
+      <label class="fl">Duration<input data-insp="dur" value="${t.summary ? fmtDays(t.span) : fmtDur(t.dur)}" ${t.summary ? 'disabled' : ''} title="3d, 4h, 30m, 2w — 0 = milestone"></label>
+      <label class="fl">% done<input data-insp="pct" value="${Math.round(t.summary ? t.pctR : t.pct)}%" ${t.summary ? 'disabled' : ''}></label>
+      <div class="ro"><span>Start</span><b>${esc(when(t.es))}</b></div><div class="ro"><span>Finish</span><b class="${t.late ? 'r' : ''}">${esc(t.ef > t.es ? when(t.ef, true) : when(t.es))}</b></div>
+      <div class="ro"><span>Latest start</span><b>${esc(when(t.ls))}</b></div><div class="ro"><span>Slack</span><b class="${t.slack <= 0 ? 'r' : ''}">${fmtDays(t.slack)}</b></div>
+      <div class="ro"><span>Total cost</span><b>${money(t.cost)}</b></div><div class="ro"><span>Work</span><b>${t.summary ? fmtDays(t.span) : fmtDays(t.who.reduce((a, w) => a + t.dur * w.units / 100, 0))}</b></div>
+    </div></div>
+    <div class="isec"><h5>Predecessors <button class="btn sm" data-act="dep-add">+ Add</button></h5>${deps || '<span class="hint">None — this task can start right away.</span>'}
+      <span class="hint">FS: start after it finishes · SS: start together · FF: finish together · SF: finish once it starts. Lag delays, lead (−) overlaps.</span></div>
+    ${t.summary ? '' : `<div class="isec"><h5>People <button class="btn sm" data-act="who-add">+ Assign</button></h5>${who || '<span class="hint">Nobody assigned.</span>'}${res ? `<span class="hint">${res}</span>` : ''}</div>`}
+    <div class="isec"><h5>Scheduling</h5><div class="g2">
+      <label class="fl">Constraint<select data-insp="c-type"><option value="asap" ${ctype === 'asap' ? 'selected' : ''}>As soon as possible</option><option value="snet" ${ctype === 'snet' ? 'selected' : ''}>Start no earlier than</option><option value="fnet" ${ctype === 'fnet' ? 'selected' : ''}>Finish no earlier than</option><option value="mso" ${ctype === 'mso' ? 'selected' : ''}>Must start on</option></select></label>
+      <label class="fl">Date<input type="date" data-insp="c-date" value="${t.constraint ? dateStr(Math.floor(t.constraint.at / 1440)) : ''}" ${t.constraint ? '' : 'disabled'}></label>
+      <label class="fl">Deadline<input type="date" data-insp="deadline" value="${t.deadline != null ? dateStr(t.deadline) : ''}"></label>
+      <div class="ro"><span>Leveling delay</span><b>${t.delay ? fmtDur(t.delay) + ` <button class="btn sm" data-act="clear-delay">Clear</button>` : '—'}</b></div>
+    </div>${t.conflict ? '<div class="warnbox">The "must start on" date is earlier than its predecessors allow.</div>' : ''}${t.late ? `<div class="warnbox">Finishes ${esc(when(t.ef, true))}, after the deadline (${nice(t.deadline)}).</div>` : ''}</div>
+    <div class="isec"><h5>Cost</h5><div class="g2"><label class="fl">Fixed cost (${esc(D.currency)})<input data-insp="fixed" value="${t.fixed || ''}" placeholder="0"></label><div class="ro"><span>Total (with people)</span><b>${money(t.cost)}</b></div></div></div>
+    ${t.base ? `<div class="isec"><h5>Baseline</h5><div class="g2"><div class="ro"><span>Planned start</span><b>${esc(when(t.base[0]))}</b></div><div class="ro"><span>Planned finish</span><b>${esc(when(t.base[1], true))}</b></div><div class="ro"><span>Slip</span><b class="${t.slip > 0 ? 'r' : ''}">${t.slip > 0 ? '+' : ''}${fmtDays(t.slip || 0)}</b></div></div></div>` : ''}
+    <div class="isec"><h5>Notes</h5><textarea data-insp="note" placeholder="Anything worth remembering…">${esc(t.note)}</textarea></div>`;
+}
+
+/* ---------- dialogs ---------- */
+function openDialog(kind) { dlgKind = kind; renderDialog(); if (!$('#dlg').open) $('#dlg').showModal(); }
+function renderDialog() {
+  const d = $('#dlg');
+  if (dlgKind === 'help') {
+    d.innerHTML = `<div class="dh"><h3>Keyboard & mouse</h3><button class="x" data-act="dlg-close">×</button></div><div class="db"><div class="keys" style="margin-top:12px">
+      ${[['N', 'New task (after the selected one)'], ['Enter', 'Open the details panel'], ['Tab / Shift+Tab', 'Indent / outdent (make or unmake subtasks)'], ['Alt+↑ / Alt+↓', 'Move the task up / down'], ['↑ / ↓', 'Select previous / next task'], ['Shift+click, Ctrl+click', 'Select several tasks'], ['Ctrl+A', 'Select all tasks'], ['Delete', 'Delete selected tasks'], ['Ctrl+C / Ctrl+V', 'Copy rows / paste rows (also from a spreadsheet)'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo'], ['1 2 3', 'Gantt / Network / People'], ['+ / − / F', 'Zoom in / out / fit'], ['C', 'Focus the critical path'], ['Ctrl+P', 'Print or save as PDF'], ['Drag a bar', 'Set "start no earlier than"'], ['Drag a bar’s right edge', 'Change the duration'], ['Drag the ○ to another bar', 'Link them (finish → start)'], ['Drag ⋮⋮ in the # column', 'Reorder rows'], ['Click a date in the timeline', 'Toggle holiday / working day']].map(([k, v]) => `<div><kbd>${k}</kbd></div><div>${v}</div>`).join('')}
+    </div></div>`;
+    return;
+  }
+  if (dlgKind !== 'calendar') return;
+  const wk = ORDER.map(i => `<div class="wkrow"><label class="sw"><input type="checkbox" data-cal="wk-on" data-d="${i}" ${D.week[i].length ? 'checked' : ''}>${DOW[i]}</label><input type="text" data-cal="wk-h" data-d="${i}" value="${hoursStr(D.week[i])}" ${D.week[i].length ? '' : 'disabled'} aria-label="${DOWL[i]} hours"><span class="mut">${+(hoursLen(D.week[i]) / 60).toFixed(2)}h</span></div>`).join('');
+  const ex = D.exceptions.map((e, k) => [e, k]).sort((a, b) => a[0].from - b[0].from).map(([e, k]) => `<div class="exrow">
+      <select data-cal="ex-type" data-k="${k}"><option value="off" ${e.hours.length ? '' : 'selected'}>🏖 Day off</option><option value="work" ${e.hours.length ? 'selected' : ''}>🛠 Working day</option></select>
+      <input type="date" data-cal="ex-from" data-k="${k}" value="${dateStr(e.from)}"><span class="mut">→</span><input type="date" data-cal="ex-to" data-k="${k}" value="${dateStr(e.to)}">
+      <input data-cal="ex-name" data-k="${k}" value="${esc(e.name)}" placeholder="Name (e.g. Christmas)">
+      <input data-cal="ex-hours" data-k="${k}" value="${hoursStr(e.hours)}" ${e.hours.length ? '' : 'disabled'} title="Working hours that day">
+      <button class="rm" data-act="ex-rm" data-k="${k}" title="Remove">×</button></div>`).join('');
+  const base = Math.max(0, Math.min(todayOff(), Math.floor(D.finish / 1440)));
+  let months = '';
+  const first = dateOf(base);
+  for (let k = 0; k < 4; k++) {
+    const y = first.getUTCFullYear(), mo = first.getUTCMonth() + k;
+    const m0 = Math.round((Date.UTC(y, mo, 1) - START) / 864e5), m1 = Math.round((Date.UTC(y, mo + 1, 1) - START) / 864e5);
+    const lead = (wdOf(m0) + 6) % 7;
+    let g = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map(x => `<span>${x}</span>`).join('') + '<span></span>'.repeat(lead);
+    for (let dd = m0; dd < m1; dd++) { const e = EXC.get(dd); const cls = e ? (e.hours.length ? 'xw' : 'hol') : isOff(dd) ? 'off' : ''; g += `<button class="${cls} ${dd === 0 ? 'st' : ''}" data-day="${dd}" title="${esc(nice(dd) + (e && e.name ? ' — ' + e.name : '') + '\n' + (isOff(dd) ? 'Day off' : hoursStr(dayHours(dd))) + (dd === 0 ? '\nProject start' : ''))}">${dateOf(dd).getUTCDate()}</button>`; }
+    const md = dateOf(m0);
+    months += `<div class="mon"><h6>${MON[md.getUTCMonth()]} ${md.getUTCFullYear()}</h6><div class="g7">${g}</div></div>`;
+  }
+  d.innerHTML = `<div class="dh"><h3>Calendar & working time</h3><span class="mut">Changes apply immediately · Ctrl+Z undoes</span><button class="x" data-act="dlg-close">×</button></div><div class="db">
+    <h4>Working week</h4><div class="wk">${wk}</div>
+    <div class="presets"><span class="mut" style="align-self:center">Presets:</span>
+      <button class="btn sm" data-act="preset" data-p="std">Mon–Fri 8–5</button><button class="btn sm" data-act="preset" data-p="96">Mon–Fri 9–6</button>
+      <button class="btn sm" data-act="preset" data-p="sat">Mon–Sat</button><button class="btn sm" data-act="preset" data-p="4x10">4×10 h</button><button class="btn sm" data-act="preset" data-p="24">24/7</button></div>
+    <div class="inl"><label>Hours in one "day" of duration <input data-cal="dh" value="${+(D.dayMinutes / 60).toFixed(2)}"></label><label>Currency <input data-cal="cur" value="${esc(D.currency)}" style="width:60px!important"></label>
+      <span class="mut">A 3d task = 3 × ${+(D.dayMinutes / 60).toFixed(2)} working hours.</span></div>
+    <h4>Holidays & exceptions</h4>${ex || '<div class="mut">No holidays yet.</div>'}
+    <div class="presets"><button class="btn sm" data-act="ex-add" data-p="off">+ Day off / holiday</button><button class="btn sm" data-act="ex-add" data-p="work">+ Extra working day</button></div>
+    <h4>Preview <span style="text-transform:none;letter-spacing:0;font-weight:400">— click a day to toggle it</span></h4><div class="months4">${months}</div>
+  </div>`;
+}
+
+/* ---------- menus ---------- */
+function openMenu(name, btn) {
+  closeMenu();
+  const items = {
+    level: [['level', 'Level resources', 'delay clashing tasks'], ['unlevel', 'Clear leveling', ''], ['-'], ['go-people', 'Show workloads', '3']],
+    baseline: [['baseline', 'Save baseline', 'snapshot dates'], ['baseline-clear', 'Clear baseline', '']],
+    export: [['exp-xml', 'ProjectLibre / MS Project (.xml)', ''], ['exp-html', 'Shareable Gantt (.html)', ''], ['exp-plan', 'Plan file (.plan)', ''], ['-'], ['print', 'Print / save as PDF', 'Ctrl+P']],
+  }[name];
+  const m = document.createElement('div');
+  m.className = 'menu'; m.id = 'menu'; m.dataset.for = name;
+  m.innerHTML = items.map(([a, l, k]) => a === '-' ? '<hr>' : `<button data-act="${a}">${l}<small>${k || ''}</small></button>`).join('');
+  document.body.appendChild(m);
+  const r = btn.getBoundingClientRect();
+  m.style.top = r.bottom + 4 + 'px';
+  m.style.left = Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + 'px';
+}
+function closeMenu() { $('#menu')?.remove(); }
+
+/* ---------- edits ---------- */
+function selectedTop(m) { return m.tasks.map((t, i) => i).filter(i => sel.has(m.tasks[i].id)); }
+function shiftLevels(m, dir) {
+  let changed = 0, skip = -1;
+  for (const i of selectedTop(m)) {
+    if (i < skip) continue;
+    const t = m.tasks[i], end = subtreeEnd(m.tasks, i);
+    if (dir > 0 ? (i === 0 || m.tasks[i - 1].level < t.level) : t.level === 0) continue;
+    for (let k = i; k < end; k++) m.tasks[k].level += dir;
+    skip = end; changed++;
+  }
+  if (!changed) throw new Error(dir > 0 ? "Can't indent — there's no task above it at the same level" : 'Already at the top level');
+}
+// A task can't link to its own summary or subtask; drop such links after restructuring.
+function fixFamilyLinks(m) {
+  const par = parentsOf(m.tasks), idx = new Map(m.tasks.map((t, i) => [t.id, i]));
+  const isAnc = (a, b) => { for (let p = par[b]; p >= 0; p = par[p]) if (p === a) return true; return false; };
+  let n = 0;
+  m.tasks.forEach((t, i) => { const before = t.deps.length; t.deps = t.deps.filter(d => { const j = idx.get(d.id); return j == null || !(isAnc(j, i) || isAnc(i, j)); }); n += before - t.deps.length; });
+  return n;
+}
+function restructure(fn, msg) {
+  let dropped = 0;
+  return commit(m => { const r = fn(m); if (r === false) return false; dropped = fixFamilyLinks(m); }, j => [typeof msg === 'function' ? msg(j) : msg, dropped ? `removed ${dropped} link(s) between a task and its own summary` : ''].filter(Boolean).join(' — '));
+}
+const indentSel = dir => restructure(m => shiftLevels(m, dir));
+function removeTasks(m, ids) {
+  const gone = new Set();
+  for (let i = 0; i < m.tasks.length; i++) if (ids.has(m.tasks[i].id)) { const end = subtreeEnd(m.tasks, i); for (let k = i; k < end; k++) gone.add(m.tasks[k].id); i = end - 1; }
+  m.tasks = m.tasks.filter(t => !gone.has(t.id));
+  m.tasks.forEach(t => t.deps = t.deps.filter(d => !gone.has(d.id)));
+  return gone.size;
+}
+function moveBlock(m, id, targetId, after) {
+  const i = m.tasks.findIndex(t => t.id === id), end = subtreeEnd(m.tasks, i), block = m.tasks.slice(i, end);
+  if (block.some(t => t.id === targetId)) return false;
+  m.tasks.splice(i, end - i);
+  const j = m.tasks.findIndex(t => t.id === targetId), at = after ? subtreeEnd(m.tasks, j) : j, delta = m.tasks[j].level - block[0].level;
+  block.forEach(t => t.level = Math.max(0, t.level + delta));
+  m.tasks.splice(at, 0, ...block);
+}
+function moveUpDown(m, id, dir) {
+  const i = m.tasks.findIndex(t => t.id === id), t = m.tasks[i], end = subtreeEnd(m.tasks, i);
+  if (dir < 0) { let j = i - 1; while (j >= 0 && m.tasks[j].level > t.level) j--; if (j < 0 || m.tasks[j].level < t.level) return false; return moveBlock(m, id, m.tasks[j].id, false); }
+  if (end >= m.tasks.length || m.tasks[end].level !== t.level) return false;
+  return moveBlock(m, id, m.tasks[end].id, true);
+}
+const newTask = (id, name, o = {}) => ({ id, name, level: 0, dur: dmin(), deps: [], who: [], pct: 0, constraint: null, deadline: null, fixed: 0, delay: 0, base: null, note: '', ...o });
+function addTask(name) {
+  const after = primary != null ? task(primary) : null;
+  let newId;
+  return commit(m => {
+    newId = Math.max(0, ...m.tasks.map(t => t.id)) + 1;
+    let at = m.tasks.length, lvl = 0, deps = [];
+    if (after) { const i = m.tasks.findIndex(t => t.id === after.id); at = subtreeEnd(m.tasks, i); lvl = m.tasks[i].level; if (!after.summary) deps = [{ id: after.id, kind: 'FS', lag: 0 }]; }
+    m.tasks.splice(at, 0, newTask(newId, name, { level: lvl, deps }));
+  }, after && !after.summary ? `Added after #${after.id}` : null).then(ok => { if (ok) { sel = new Set([newId]); primary = anchor = newId; render(); setTimeout(() => $('[data-f="new"]')?.focus(), 0); } return ok; });
+}
+function pasteRows(txt) {
+  let lines = txt.replace(/\r/g, '').split('\n').filter(l => l.trim());
+  if (lines.length && /^(task( name)?|name)$/i.test(lines[0].split('\t')[0].trim())) lines.shift();
+  if (!lines.length) return;
+  const rows = lines.map(l => {
+    let c = l.split('\t');
+    if (c.length > 1 && /^\s*\d+\s*$/.test(c[0]) && !/^\s*\d+\s*$/.test(c[1])) c = c.slice(1);
+    const lead = c[0].match(/^\s*/)[0].replace(/\t/g, '  ').length;
+    let dur = dmin(), who = [], pct = 0;
+    try { if (c[1] && c[1].trim()) dur = parseDur(c[1]); } catch (e) {}
+    try { if (c[3]) who = parseWho(c[3]); } catch (e) {}
+    if (c[4]) pct = Math.max(0, Math.min(100, parseInt(c[4], 10) || 0));
+    return { name: cl(c[0]) || 'Pasted task', lvl: Math.floor(lead / 2), dur, who, pct };
+  });
+  const min = Math.min(...rows.map(r => r.lvl));
+  commit(m => {
+    let at = m.tasks.length, base = 0, id = Math.max(0, ...m.tasks.map(t => t.id)) + 1;
+    if (primary != null) { const i = m.tasks.findIndex(t => t.id === primary); if (i >= 0) { at = subtreeEnd(m.tasks, i); base = m.tasks[i].level; } }
+    rows.forEach((r, k) => m.tasks.splice(at + k, 0, newTask(id++, r.name, { level: base + r.lvl - min, dur: r.dur, who: r.who, pct: r.pct })));
+  }, `Pasted ${rows.length} task${rows.length > 1 ? 's' : ''}${lines.some(l => l.split('\t')[2]?.trim()) ? ' (links are not pasted)' : ''}`);
+}
+function toggleDay(d) {
+  commit(m => {
+    const k = m.exceptions.findIndex(e => e.from <= d && d <= e.to);
+    if (k >= 0) {
+      const e = m.exceptions[k];
+      m.exceptions.splice(k, 1);
+      if (e.from < d) m.exceptions.push({ ...e, to: d - 1 });
+      if (d < e.to) m.exceptions.push({ ...e, from: d + 1 });
+    } else if (isOff(d)) m.exceptions.push({ from: d, to: d, name: 'Extra working day', hours: (m.week.find(h => h.length) || STD).map(x => [...x]) });
+    else m.exceptions.push({ from: d, to: d, name: 'Holiday', hours: [] });
+    m.exceptions.sort((a, b) => a.from - b.from);
+  }, () => `${nice(d)} is now ${isOff(d) ? 'a day off' : 'a working day'} — tasks rescheduled`);
+}
+
+/* ---------- interactions ---------- */
+function setView(v) { view = v; store('view', v); history.replaceState(null, '', '#' + v); render(); }
+function zoom(f) { dw = Math.max(6, Math.min(80, Math.round(dw * f))); store('dw', dw); render(); }
+function fit() {
+  const GW = view === 'resources' ? 640 : colsDef().reduce((a, c) => a + c[2], 0);
+  const days = Math.max(Math.ceil(D.finish / 1440) + 4, 10);
+  dw = Math.max(6, Math.min(60, Math.floor((innerWidth - GW - inspW() - 30) / (days + PAD))));
+  store('dw', dw); render();
+}
+function selectClick(id, e) {
+  if (e.shiftKey && anchor != null) { const vis = visibleRows().map(i => D.tasks[i].id), a = vis.indexOf(anchor), b = vis.indexOf(id); if (a >= 0 && b >= 0) sel = new Set(vis.slice(Math.min(a, b), Math.max(a, b) + 1)); primary = id; }
+  else if (e.ctrlKey || e.metaKey) { sel.has(id) ? sel.delete(id) : sel.add(id); primary = sel.has(id) ? id : ([...sel].pop() ?? null); anchor = id; }
+  else { sel = new Set([id]); primary = anchor = id; }
+}
+function setCollapsed(id, on) { on ? collapsed.add(id) : collapsed.delete(id); store('collapsed:' + D.path, JSON.stringify([...collapsed])); render(); }
+
+async function act(a, el) {
+  closeMenu();
+  const id = el?.dataset.id != null ? +el.dataset.id : null, k = el?.dataset.k != null ? +el.dataset.k : null;
+  const onTask = fn => commit(m => { const t = mt(m, primary); if (!t) return false; return fn(t, m); });
+  switch (a) {
+    case 'add': if (view !== 'gantt') setView('gantt'); setTimeout(() => $('[data-f="new"]')?.focus(), 0); break;
+    case 'undo': doUndo(); break;
+    case 'redo': doRedo(); break;
+    case 'zin': zoom(1.25); break;
+    case 'zout': zoom(0.8); break;
+    case 'fit': fit(); break;
+    case 'table': tableMode = tableMode === 'full' ? 'compact' : 'full'; store('table', tableMode); render(); break;
+    case 'crit': focusCrit = !focusCrit; render(); break;
+    case 'details': inspOpen = !inspOpen; store('insp', inspOpen ? '1' : '0'); render(); break;
+    case 'help': openDialog('help'); break;
+    case 'calendar': openDialog('calendar'); break;
+    case 'dlg-close': $('#dlg').close(); dlgKind = null; break;
+    case 'indent': indentSel(1); break;
+    case 'outdent': indentSel(-1); break;
+    case 'toggle': setCollapsed(id, !collapsed.has(id)); break;
+    case 'del': { const t = task(id); commit(m => { removeTasks(m, new Set([id])); }, `Deleted “${t.name}”${t.summary ? ' and its subtasks' : ''} — Ctrl+Z to undo`); break; }
+    case 'del-sel': { const n = sel.size; commit(m => { removeTasks(m, new Set(sel)); }, `Deleted ${n} task(s) — Ctrl+Z to undo`); break; }
+    case 'link-chain': commit(m => { const ts = m.tasks.filter(t => sel.has(t.id)); for (let i = 1; i < ts.length; i++) if (!ts[i].deps.some(d => d.id === ts[i - 1].id)) ts[i].deps.push({ id: ts[i - 1].id, kind: 'FS', lag: 0 }); }, 'Linked the selected tasks in order'); break;
+    case 'level': action('/api/level'); break;
+    case 'unlevel': action('/api/unlevel'); break;
+    case 'baseline': action('/api/baseline', D.tasks.some(t => t.base) ? 'Replace the saved baseline with the current dates?' : null); break;
+    case 'baseline-clear': action('/api/baseline/clear'); break;
+    case 'go-people': setView('resources'); break;
+    case 'import': $('#file').click(); break;
+    case 'exp-xml': location.href = '/api/export.xml?token=' + TOKEN; break;
+    case 'exp-html': location.href = '/api/export.html?token=' + TOKEN; break;
+    case 'exp-plan': location.href = '/api/export.plan?token=' + TOKEN; break;
+    case 'print': if (view !== 'gantt') setView('gantt'); setTimeout(() => print(), 50); break;
+    case 'dep-add': onTask(t => { const i = tIdx(t.id), rel = relatives(i); const ok = x => !rel.has(x.id) && !t.deps.some(d => d.id === x.id); const cand = D.tasks.slice(0, i).reverse().find(ok) || D.tasks.find(ok); if (!cand) throw new Error('There are no other tasks to link to'); t.deps.push({ id: cand.id, kind: 'FS', lag: 0 }); }); break;
+    case 'dep-rm': onTask(t => { t.deps.splice(k, 1); }); break;
+    case 'who-add': onTask(t => { const r = D.resources.find(r => !t.who.some(a => a.name === r.name)); t.who.push({ name: r ? r.name : 'New person', units: 100 }); }); break;
+    case 'who-rm': onTask(t => { t.who.splice(k, 1); }); break;
+    case 'clear-delay': onTask(t => { t.delay = 0; }); break;
+    case 'res-rm': {
+      const name = el.dataset.name, n = D.tasks.filter(t => t.who.some(a => a.name === name)).length;
+      if (n && !confirm(`Remove ${name}? They're assigned to ${n} task(s); those assignments will be removed too.`)) return;
+      commit(m => { m.resources = m.resources.filter(r => r.name !== name); m.tasks.forEach(t => t.who = t.who.filter(a => a.name !== name)); }, `Removed ${name}`); break;
+    }
+    case 'preset': {
+      const p = el.dataset.p;
+      commit(m => {
+        const day = { std: STD, 96: [[540, 780], [840, 1080]], sat: m.week[1].length ? m.week[1] : STD, '4x10': [[420, 720], [750, 1050]], 24: [[0, 1440]] }[p];
+        const on = { std: [1, 2, 3, 4, 5], 96: [1, 2, 3, 4, 5], sat: [1, 2, 3, 4, 5, 6], '4x10': [1, 2, 3, 4], 24: [0, 1, 2, 3, 4, 5, 6] }[p];
+        m.week = m.week.map((h, i) => on.includes(i) ? day.map(x => [...x]) : []);
+        m.dayMinutes = p === '24' ? 1440 : p === '4x10' ? 600 : 480;
+      }, 'Working week updated — tasks rescheduled'); break;
+    }
+    case 'ex-add': {
+      const work = el.dataset.p === 'work';
+      let d = Math.max(0, todayOff()); for (let n = 0; n < 30 && (work ? !isOff(d) : isOff(d)); n++) d++;
+      commit(m => { m.exceptions.push({ from: d, to: d, name: work ? 'Extra working day' : 'Holiday', hours: work ? (m.week.find(h => h.length) || STD).map(x => [...x]) : [] }); }); break;
+    }
+    case 'ex-rm': commit(m => { m.exceptions.splice(k, 1); }); break;
+  }
+}
+
+document.addEventListener('click', e => {
+  if (suppressClick) { suppressClick = false; return; }
+  const mb = e.target.closest('[data-menu]');
+  if (mb) { if ($('#menu')?.dataset.for === mb.dataset.menu) closeMenu(); else openMenu(mb.dataset.menu, mb); return; }
+  if (!e.target.closest('#menu')) closeMenu();
+  const b = e.target.closest('[data-act]'); if (b && !b.disabled) return act(b.dataset.act, b);
+  const tab = e.target.closest('#tabs button'); if (tab) return setView(tab.dataset.v);
+  const day = e.target.closest('[data-day]'); if (day) return toggleDay(+day.dataset.day);
+  if (e.target === $('#dlg')) { $('#dlg').close(); dlgKind = null; return; }
+  const node = e.target.closest('[data-node]');
+  const bar = e.target.closest('[data-bar]'), row = e.target.closest('[data-row]');
+  const id = node ? +node.dataset.node : bar ? +bar.dataset.bar : row ? +row.dataset.row : null;
+  if (id == null) return;
+  if (e.detail === 2 && (bar || node)) return openDetails(id);
+  const inInput = e.target.matches('input,select,textarea');
+  if (!inInput && !e.shiftKey && !e.ctrlKey && !e.metaKey && sel.size === 1 && sel.has(id)) return;
+  if (inInput && sel.has(id) && !e.shiftKey && !e.ctrlKey && !e.metaKey) { if (primary !== id) { primary = anchor = id; inspector(); } return; }
+  selectClick(id, e);
+  // Clicking into a field keeps focus; only re-render fully if the details panel appears or disappears.
+  if (inInput && $('#insp').hidden === !inspW()) { $$('.row[data-row]').forEach(r => r.classList.toggle('sel', sel.has(+r.dataset.row))); renderToolbar(); inspector(); }
+  else render();
+});
+function openDetails(id) {
+  sel = new Set([id]); primary = anchor = id; inspOpen = true; store('insp', '1');
+  if (view !== 'gantt') setView('gantt'); else render();
+  setTimeout(() => { const el = $('[data-insp="name"]'); el?.focus(); el?.select(); }, 0);
+}
+
+document.addEventListener('change', e => {
+  const el = e.target, v = (el.value || '').trim();
+  if (el.id === 'pname') return commit(m => { m.name = v || m.name; }, 'Renamed project');
+  if (el.id === 'pstart') return v && commit(m => { m.start = v; }, `Project now starts ${v}`);
+  if (el.id === 'file') return importFile(el);
+  if (el.dataset.f && el.dataset.f !== 'new') {
+    const id = +el.dataset.id, f = el.dataset.f;
+    return commit(m => {
+      const t = mt(m, id); if (!t) return false;
+      if (f === 'name') { if (!v) return false; t.name = v; }
+      if (f === 'dur') t.dur = parseDur(v);
+      if (f === 'pct') { const n = parseInt(v, 10); if (!(n >= 0)) throw new Error('% done must be 0–100'); t.pct = Math.min(100, n); }
+      if (f === 'who') t.who = parseWho(v);
+      if (f === 'deps') { t.deps = parseDeps(v); if (t.deps.some(d => d.id === id)) throw new Error("A task can't depend on itself"); }
+    });
+  }
+  if (el.dataset.insp) return inspChange(el, v);
+  if (el.dataset.cal) return calChange(el, v);
+  if (el.dataset.res) return resChange(el, v);
+});
+function inspChange(el, v) {
+  const f = el.dataset.insp, k = +el.dataset.k;
+  if (f === 'bulk-who' || f === 'bulk-pct') {
+    const ids = new Set(sel);
+    return commit(m => {
+      const who = f === 'bulk-who' ? parseWho(v) : null, pct = f === 'bulk-pct' ? Math.max(0, Math.min(100, parseInt(v, 10) || 0)) : 0;
+      const sums = new Set(D.tasks.filter(t => t.summary).map(t => t.id));
+      m.tasks.filter(t => ids.has(t.id) && !sums.has(t.id)).forEach(t => { if (who) t.who = who.map(a => ({ ...a })); else t.pct = pct; });
+    }, `Updated ${ids.size} task(s)`);
+  }
+  commit(m => {
+    const t = mt(m, primary); if (!t) return false;
+    switch (f) {
+      case 'name': if (!v) return false; t.name = v; break;
+      case 'note': t.note = v; break;
+      case 'dur': t.dur = parseDur(v); break;
+      case 'pct': { const n = parseInt(v, 10); if (!(n >= 0)) throw new Error('% done must be 0–100'); t.pct = Math.min(100, n); break; }
+      case 'dep-id': t.deps[k].id = +v; break;
+      case 'dep-kind': t.deps[k].kind = v; break;
+      case 'dep-lag': t.deps[k].lag = parseLag(v); break;
+      case 'who-name': { const n = rn(v); if (!n) t.who.splice(k, 1); else if (t.who.some((a, j) => j !== k && a.name === n)) throw new Error(`${n} is already assigned`); else t.who[k].name = n; break; }
+      case 'who-units': { const n = parseInt(v, 10); if (!(n >= 1 && n <= 1000)) throw new Error('Units must be 1–1000%'); t.who[k].units = n; break; }
+      case 'c-type': t.constraint = v === 'asap' ? null : { type: v, at: t.constraint ? t.constraint.at : sDay(task(primary)) * 1440 }; break;
+      case 'c-date': if (!v || !t.constraint) return false; t.constraint.at = offOf(v) * 1440; break;
+      case 'deadline': t.deadline = v ? offOf(v) : null; break;
+      case 'fixed': { const n = v === '' ? 0 : +v.replace(/[^\d.\-]/g, ''); if (!isFinite(n)) throw new Error('Cost must be a number'); t.fixed = n; break; }
+    }
+  });
+}
+function calChange(el, v) {
+  const f = el.dataset.cal, d = +el.dataset.d, k = +el.dataset.k;
+  commit(m => {
+    switch (f) {
+      case 'wk-on': m.week[d] = el.checked ? (m.week.find(h => h.length) || STD).map(x => [...x]) : []; if (m.week.every(h => !h.length)) throw new Error('At least one weekday needs working hours'); break;
+      case 'wk-h': m.week[d] = parseHours(v); if (m.week.every(h => !h.length)) throw new Error('At least one weekday needs working hours'); break;
+      case 'dh': { const h = +v.replace(',', '.'); if (!(h >= 0.25 && h <= 24)) throw new Error('Hours per day must be between 0.25 and 24'); m.dayMinutes = Math.round(h * 60); break; }
+      case 'cur': m.currency = cl(v) || '$'; break;
+      case 'ex-type': m.exceptions[k].hours = v === 'off' ? [] : (m.week.find(h => h.length) || STD).map(x => [...x]); break;
+      case 'ex-from': { const a = offOf(v); m.exceptions[k].from = a; if (m.exceptions[k].to < a) m.exceptions[k].to = a; break; }
+      case 'ex-to': { const b = offOf(v); if (b < m.exceptions[k].from) throw new Error("The end date can't be before the start"); m.exceptions[k].to = b; break; }
+      case 'ex-name': m.exceptions[k].name = cl(v); break;
+      case 'ex-hours': { const h = parseHours(v); if (!h.length) throw new Error('A working day needs hours (or switch it to "Day off")'); m.exceptions[k].hours = h; break; }
+    }
+  });
+}
+function resChange(el, v) {
+  const f = el.dataset.res, name = el.dataset.name;
+  commit(m => {
+    if (f === 'new') { const n = rn(v); if (!n) return false; if (D.resources.some(r => r.name === n)) throw new Error(`${n} is already on the team`); ensureRes(m, n); return; }
+    const r = ensureRes(m, name);
+    if (f === 'name') { const n = rn(v); if (!n || n === name) return false; if (D.resources.some(x => x.name === n)) throw new Error(`${n} already exists`); r.name = n; m.tasks.forEach(t => t.who.forEach(a => { if (a.name === name) a.name = n; })); }
+    if (f === 'rate') { const n = v === '' ? 0 : +v.replace(/[^\d.]/g, ''); if (!isFinite(n)) throw new Error('Rate must be a number'); r.rate = n; }
+    if (f === 'capacity') { const n = parseInt(v, 10); if (!(n >= 1 && n <= 1000)) throw new Error('Capacity must be 1–1000%'); r.capacity = n; }
+    if (f === 'off') r.off = parseRanges(v);
+  }, f === 'new' ? `Added ${rn(v)}` : null);
+}
+async function importFile(input) {
+  const f = input.files[0]; input.value = ''; if (!f) return;
+  const xml = await f.text();
+  if (D.tasks.length && !confirm(`Replace “${D.name}” with “${f.name}”?\nYou can undo this with Ctrl+Z.`)) return;
+  return enqueue(async () => {
+    const prev = D.text, j = await api('POST', '/api/import', xml);
+    if (!j.ok) { if (!j.handled) toast('Import failed: ' + j.error, 1); return; }
+    undo.push(prev); redo = []; sel = new Set(); primary = null;
+    accept(j); fit(); saved(); toast(`Imported ${j.tasks.length} tasks and ${j.resources.length} people from ${f.name}`);
+  });
+}
+
+document.addEventListener('keydown', e => {
+  const el = e.target, inInput = el.matches && el.matches('input,select,textarea');
+  if (e.key === 'Escape' && $('#menu')) { closeMenu(); return; }
+  if ($('#dlg').open) return;
+  if (inInput) {
+    if (e.key === 'Enter' && el.dataset.f === 'new') { const name = el.value.trim(); if (name) addTask(name); return; }
+    if (e.key === 'Enter' && el.tagName !== 'TEXTAREA' && el.tagName !== 'SELECT') { el.blur(); return; }
+    if (e.key === 'Escape') { render(); el.blur(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !el.value) { e.preventDefault(); doUndo(); }
+    return;
+  }
+  const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
+  if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
+  if (mod && k === 'y') { e.preventDefault(); doRedo(); return; }
+  if (mod && k === 'a' && view === 'gantt') { e.preventDefault(); sel = new Set(visibleRows().map(i => D.tasks[i].id)); render(); return; }
+  if (mod) return;
+  if (k === 'tab' && sel.size) { e.preventDefault(); indentSel(e.shiftKey ? -1 : 1); return; }
+  if (e.altKey && (k === 'arrowright' || k === 'arrowleft') && sel.size) { e.preventDefault(); indentSel(k === 'arrowright' ? 1 : -1); return; }
+  if (k === '1') setView('gantt'); if (k === '2') setView('network'); if (k === '3') setView('resources');
+  if (k === 'n') { e.preventDefault(); act('add'); }
+  if (k === '+' || k === '=') zoom(1.25);
+  if (k === '-') zoom(0.8);
+  if (k === 'f') fit();
+  if (k === 'c') { focusCrit = !focusCrit; render(); }
+  if (k === '?') openDialog('help');
+  if (k === 'enter' && primary != null) { inspOpen = true; store('insp', '1'); render(); setTimeout(() => $('[data-insp="name"]')?.focus(), 0); }
+  if ((k === 'delete' || k === 'backspace') && sel.size) { const n = sel.size; commit(m => { removeTasks(m, new Set(sel)); }, `Deleted ${n} task(s) — Ctrl+Z to undo`); }
+  if (k === 'escape') { sel = new Set(); primary = null; render(); }
+  if ((k === 'arrowup' || k === 'arrowdown') && D.tasks.length) {
+    e.preventDefault();
+    const dir = k === 'arrowup' ? -1 : 1;
+    if (e.altKey && primary != null) { restructure(m => moveUpDown(m, primary, dir)); return; }
+    const vis = visibleRows().map(i => D.tasks[i].id), i = vis.indexOf(primary);
+    const j = i < 0 ? 0 : Math.max(0, Math.min(vis.length - 1, i + dir));
+    if (e.shiftKey && primary != null) { sel.add(vis[j]); primary = vis[j]; } else { sel = new Set([vis[j]]); primary = anchor = vis[j]; }
+    render(); document.querySelector(`[data-row="${primary}"]`)?.scrollIntoView({ block: 'nearest' });
+  }
+});
+document.addEventListener('copy', e => {
+  if (e.target.matches?.('input,textarea') && e.target.selectionStart !== e.target.selectionEnd) return;
+  if (!sel.size || !D) return;
+  const rows = D.tasks.filter(t => sel.has(t.id)), min = Math.min(...rows.map(t => t.level));
+  e.clipboardData.setData('text/plain', rows.map(t => ['  '.repeat(t.level - min) + t.name, t.summary ? '' : fmtDur(t.dur), depsStr(t), whoStr(t), t.pct].join('\t')).join('\n'));
+  e.preventDefault(); toast(`Copied ${rows.length} task(s) — paste here or into a spreadsheet`);
+});
+document.addEventListener('paste', e => {
+  const txt = e.clipboardData.getData('text/plain'), inNew = e.target.dataset?.f === 'new';
+  if (e.target.matches?.('input,textarea') && !(inNew && /[\t\n]/.test(txt.trim()))) return;
+  if (view !== 'gantt' || !txt.trim()) return;
+  e.preventDefault(); pasteRows(txt);
+});
+
+/* drag rows to reorder */
+const clearDrop = () => $$('.drop-before,.drop-after').forEach(r => r.classList.remove('drop-before', 'drop-after'));
+document.addEventListener('dragstart', e => { const h = e.target.closest?.('[data-drag]'); if (!h) return; dragRow = +h.dataset.drag; e.dataTransfer.setData('text/plain', ''); e.dataTransfer.effectAllowed = 'move'; });
+document.addEventListener('dragover', e => {
+  if (dragRow == null) return; const row = e.target.closest('[data-row]'); clearDrop();
+  if (!row) return; e.preventDefault(); const r = row.getBoundingClientRect(); row.classList.add(e.clientY > r.top + r.height / 2 ? 'drop-after' : 'drop-before');
+});
+document.addEventListener('drop', e => {
+  if (dragRow == null) return; const row = e.target.closest('[data-row]'); e.preventDefault();
+  const id = dragRow, after = row?.classList.contains('drop-after'); dragRow = null; clearDrop();
+  if (!row || +row.dataset.row === id) return;
+  const target = +row.dataset.row;
+  restructure(m => moveBlock(m, id, target, after), `Moved #${id}`);
+});
+document.addEventListener('dragend', () => { dragRow = null; clearDrop(); });
+
+/* drag bars: move (start-no-earlier-than), resize (duration), link */
+document.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  const r = e.target.closest('[data-resize]'), l = e.target.closest('[data-link]'), mv = !r && !l && e.target.closest('[data-move]');
+  if (!r && !l && !mv) return;
+  hideTip();
+  if (r) { e.preventDefault(); const bar = r.parentElement; drag = { kind: 'resize', id: +r.dataset.resize, bar, x0: e.clientX, w0: bar.offsetWidth }; document.body.style.cursor = 'ew-resize'; }
+  else if (l) {
+    e.preventDefault();
+    const svg = $('#links'), box = svg.getBoundingClientRect(), src = l.parentElement.getBoundingClientRect();
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('class', 'tmp'); svg.appendChild(p);
+    drag = { kind: 'link', id: +l.dataset.link, path: p, box, sx: src.right - box.left, sy: src.top + src.height / 2 - box.top }; document.body.style.cursor = 'crosshair';
+  } else { drag = { kind: 'move', id: +mv.dataset.move, bar: mv, x0: e.clientX, l0: mv.offsetLeft, moved: false }; }
+});
+document.addEventListener('mousemove', e => {
+  if (!drag) return moveTip(e);
+  const t = task(drag.id);
+  if (drag.kind === 'resize') {
+    const w = Math.max(dw * 0.5, drag.w0 + e.clientX - drag.x0); drag.bar.style.width = w + 'px';
+    const endDay = Math.floor((drag.bar.offsetLeft + w - 1) / dw - PAD);
+    drag.dur = Math.max(1, workDays(sDay(t), endDay)) * dmin();
+    showTip(e, `<h5>${esc(t.name)}</h5><b>${fmtDur(drag.dur)}</b> → ends ${nice(Math.max(endDay, sDay(t)))}`);
+  } else if (drag.kind === 'link') {
+    const x = e.clientX - drag.box.left, y = e.clientY - drag.box.top;
+    drag.path.setAttribute('d', `M${drag.sx},${drag.sy} C${drag.sx + 60},${drag.sy} ${x - 60},${y} ${x},${y}`);
+  } else {
+    const dx = e.clientX - drag.x0; if (!drag.moved && Math.abs(dx) < 4) return;
+    drag.moved = true; drag.bar.classList.add('dragging'); drag.bar.style.left = drag.l0 + dx + 'px';
+    drag.day = t.dur === 0 ? Math.floor((drag.l0 + dx + 8) / dw - PAD) : Math.round((drag.l0 + dx) / dw - PAD);
+    showTip(e, `<h5>${esc(t.name)}</h5>Start no earlier than <b>${nice(drag.day)}</b>`);
+  }
+});
+document.addEventListener('mouseup', e => {
+  if (!drag) return;
+  const d = drag; drag = null; document.body.style.cursor = ''; hideTip();
+  const t = task(d.id);
+  if (d.kind === 'resize') {
+    noClick();
+    if (d.dur && d.dur !== t.dur) commit(m => { mt(m, d.id).dur = d.dur; }, `“${t.name}” is now ${fmtDur(d.dur)}`); else render();
+  } else if (d.kind === 'link') {
+    d.path.remove(); noClick();
+    const tgt = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-bar],[data-row],[data-node]');
+    const tid = tgt ? +(tgt.dataset.bar || tgt.dataset.row || tgt.dataset.node) : null;
+    if (tid && tid !== d.id) commit(m => {
+      const x = mt(m, tid); if (x.deps.some(y => y.id === d.id)) { toast('Already linked'); return false; }
+      if (relatives(tIdx(tid)).has(d.id)) throw new Error("A task can't link to its own summary or subtask");
+      x.deps.push({ id: d.id, kind: 'FS', lag: 0 });
+    }, `Linked #${d.id} → #${tid}`);
+  } else if (d.moved) {
+    noClick();
+    const day = d.day;
+    commit(m => { mt(m, d.id).constraint = { type: 'snet', at: day * 1440 }; }, j => {
+      const nt = j.tasks.find(x => x.id === d.id);
+      return nt && Math.floor(nt.es / 1440) > day ? `#${d.id} can't start before ${nice(Math.floor(nt.es / 1440))} (its predecessors or a day off) — constraint saved anyway` : `#${d.id} now starts no earlier than ${nice(day)} (📌 remove it in Details)`;
+    });
+  }
+});
+
+/* tooltip */
+const tip = $('#tip');
+function showTip(e, html) { tip.innerHTML = html; tip.style.display = 'block'; const r = tip.getBoundingClientRect(); tip.style.left = Math.min(e.clientX + 16, innerWidth - r.width - 10) + 'px'; tip.style.top = Math.min(e.clientY + 16, innerHeight - r.height - 10) + 'px'; }
+function hideTip() { tip.style.display = 'none'; }
+function moveTip(e) {
+  const b = e.target.closest && e.target.closest('[data-tip]');
+  if (!b || e.target.closest('[data-link],[data-resize]')) return hideTip();
+  const t = task(+b.dataset.tip); if (!t) return hideTip();
+  showTip(e, `<h5>#${t.id} ${esc(t.name)} ${t.crit ? '<span class="chip r">critical</span>' : `<span class="chip">${fmtDays(t.slack)} slack</span>`}${t.late ? '<span class="chip r">late</span>' : ''}</h5>
+    <div class="g"><span>Start</span><b>${esc(when(t.es))}</b><span>Finish</span><b>${esc(t.ef > t.es ? when(t.ef, true) : when(t.es))}</b>
+    <span>Duration</span><b>${t.summary ? fmtDays(t.span) + ' (summary)' : t.dur ? fmtDur(t.dur) : 'Milestone'}</b><span>Who</span><b>${esc(whoStr(t) || '—')}</b>
+    <span>Done</span><b>${Math.round(t.summary ? t.pctR : t.pct)}%</b><span>After</span><b>${esc(depsStr(t) || '—')}</b>
+    <span>Latest start</span><b>${esc(when(t.ls))}</b>${t.cost ? `<span>Cost</span><b>${money(t.cost)}</b>` : ''}
+    ${t.constraint ? `<span>Constraint</span><b>${esc(consLabel(t.constraint))}</b>` : ''}${t.deadline != null ? `<span>Deadline</span><b>${nice(t.deadline)}</b>` : ''}
+    ${t.base ? `<span>Baseline</span><b>${esc(when(t.base[0]))} → ${esc(when(t.base[1], true))}</b>` : ''}</div>`);
+}
+document.addEventListener('mouseleave', hideTip);
+
+/* misc */
+function toast(msg, err) { const box = $('#toasts'); while (box.children.length >= 3) box.firstChild.remove(); const t = document.createElement('div'); t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg; $('#toasts').appendChild(t); setTimeout(() => t.remove(), err ? 6000 : 2800); }
+let savedT; function saved() { const s = $('#saved'); s.style.opacity = 1; clearTimeout(savedT); savedT = setTimeout(() => s.style.opacity = 0, 1600); }
+function applyTheme(t) { document.documentElement.dataset.theme = t; }
+applyTheme(store('theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+$('#theme').onclick = () => { const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; applyTheme(t); store('theme', t); };
+$('#dlg').addEventListener('close', () => { dlgKind = null; });
+document.addEventListener('wheel', e => { if (e.ctrlKey && view !== 'network') { e.preventDefault(); zoom(e.deltaY < 0 ? 1.1 : 0.9); } }, { passive: false });
+let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(render, 150); });
+addEventListener('beforeprint', () => { if (view !== 'gantt') { view = 'gantt'; render(); } });
+
+/* live reload when the .plan file changes elsewhere (text editor, CLI, git pull…) */
+setInterval(async () => {
+  if (!D || drag || document.activeElement?.matches('input,select,textarea') || $('#dlg').open) return;
+  try {
+    const r = await (await fetch('/api/rev', { headers: { 'X-Rplan-Token': TOKEN } })).json();
+    if (r.rev && r.rev !== D.rev) { await chain; const old = D.text; await load(); if (D.text !== old) { undo.push(old); toast('Reloaded — the file changed on disk'); } }
+  } catch (e) {}
+}, 1500);
+
+load();
+</script>
+</body>
+</html>

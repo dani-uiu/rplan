@@ -1,0 +1,11 @@
+[package]
+name = "rplan"
+version = "0.1.0"
+edition = "2021"
+description = "Fast, plain-text project scheduler: critical path, Gantt, resource load"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true

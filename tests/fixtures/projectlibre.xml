@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- A small project in the Microsoft Project XML format, as saved by ProjectLibre. -->
+<Project xmlns="http://schemas.microsoft.com/project">
+  <SaveVersion>12</SaveVersion>
+  <Name>Office Move.xml</Name>
+  <Title>Office Move</Title>
+  <ScheduleFromStart>1</ScheduleFromStart>
+  <StartDate>2027-01-04T08:00:00</StartDate>
+  <CurrencySymbol>€</CurrencySymbol>
+  <CalendarUID>1</CalendarUID>
+  <MinutesPerDay>480</MinutesPerDay>
+  <Calendars>
+    <Calendar>
+      <UID>1</UID><Name>Standard</Name><IsBaseCalendar>1</IsBaseCalendar><BaseCalendarUID>-1</BaseCalendarUID>
+      <WeekDays>
+        <WeekDay><DayType>1</DayType><DayWorking>0</DayWorking></WeekDay>
+        <WeekDay><DayType>2</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+        <WeekDay><DayType>3</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+        <WeekDay><DayType>4</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+        <WeekDay><DayType>5</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+        <WeekDay><DayType>6</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+        <WeekDay><DayType>7</DayType><DayWorking>0</DayWorking></WeekDay>
+        <WeekDay><DayType>0</DayType><DayWorking>0</DayWorking><TimePeriod><FromDate>2027-01-06T00:00:00</FromDate><ToDate>2027-01-06T23:59:00</ToDate></TimePeriod></WeekDay>
+      </WeekDays>
+    </Calendar>
+  </Calendars>
+  <Tasks>
+    <Task><UID>0</UID><ID>0</ID><Name>Office Move</Name><OutlineLevel>0</OutlineLevel><Summary>1</Summary></Task>
+    <Task><UID>1</UID><ID>1</ID><Name>Preparation</Name><OutlineLevel>1</OutlineLevel><Summary>1</Summary><Duration>PT40H0M0S</Duration></Task>
+    <Task><UID>2</UID><ID>2</ID><Name>Pack boxes</Name><OutlineLevel>2</OutlineLevel><Duration>PT24H0M0S</Duration><PercentComplete>50</PercentComplete></Task>
+    <Task><UID>3</UID><ID>3</ID><Name>Book movers</Name><OutlineLevel>2</OutlineLevel><Duration>PT4H0M0S</Duration><Notes>Get 3 quotes &amp; pick one</Notes></Task>
+    <Task><UID>4</UID><ID>4</ID><Name>Moving day</Name><OutlineLevel>1</OutlineLevel><Duration>PT8H0M0S</Duration><ConstraintType>4</ConstraintType><ConstraintDate>2027-01-11T08:00:00</ConstraintDate>
+      <PredecessorLink><PredecessorUID>1</PredecessorUID><Type>1</Type><LinkLag>0</LinkLag><LagFormat>7</LagFormat></PredecessorLink></Task>
+    <Task><UID>5</UID><ID>5</ID><Name>Unpacked</Name><OutlineLevel>1</OutlineLevel><Duration>PT0H0M0S</Duration><Milestone>1</Milestone>
+      <PredecessorLink><PredecessorUID>4</PredecessorUID><Type>1</Type><LinkLag>4800</LinkLag><LagFormat>7</LagFormat></PredecessorLink></Task>
+  </Tasks>
+  <Resources>
+    <Resource><UID>0</UID><ID>0</ID><Name>Unassigned</Name><IsNull>1</IsNull></Resource>
+    <Resource><UID>1</UID><ID>1</ID><Name>Marta</Name><MaxUnits>1.00</MaxUnits><StandardRate>40</StandardRate></Resource>
+  </Resources>
+  <Assignments>
+    <Assignment><UID>1</UID><TaskUID>2</TaskUID><ResourceUID>1</ResourceUID><Units>1</Units></Assignment>
+    <Assignment><UID>2</UID><TaskUID>3</TaskUID><ResourceUID>1</ResourceUID><Units>0.5</Units></Assignment>
+  </Assignments>
+</Project>
