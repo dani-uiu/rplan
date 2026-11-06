@@ -12,7 +12,8 @@ import path from 'node:path';
 
 const args = process.argv.slice(2);
 const shotsAt = args.indexOf('--shots');
-const shots = shotsAt >= 0 ? args.splice(shotsAt, 2)[1] : null;
+// On CI, screenshots of failures go to ./ui-shots so they can be uploaded.
+const shots = shotsAt >= 0 ? args.splice(shotsAt, 2)[1] : process.env.CI ? 'ui-shots' : null;
 const exe = path.resolve(args[0] || (process.platform === 'win32' ? 'target/debug/rplan.exe' : 'target/debug/rplan'));
 const browser = process.env.BROWSER || [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
@@ -46,7 +47,8 @@ const url = await waitFor(() => (srvOut.match(/http:\/\/127\.0\.0\.1:\d+\//) || 
 
 // ---------- start the browser ----------
 const dport = 9400 + Math.floor(Math.random() * 400);
-const br = spawn(browser, ['--headless=new', '--disable-gpu', `--remote-debugging-port=${dport}`, `--user-data-dir=${path.join(tmp, 'profile')}`, '--window-size=1500,950', '--no-first-run', '--no-default-browser-check', 'about:blank']);
+const sandbox = process.platform === 'linux' && process.env.CI ? ['--no-sandbox'] : [];
+const br = spawn(browser, ['--headless=new', '--disable-gpu', ...sandbox, `--remote-debugging-port=${dport}`, `--user-data-dir=${path.join(tmp, 'profile')}`, '--window-size=1500,950', '--no-first-run', '--no-default-browser-check', 'about:blank']);
 procs.push(br);
 const target = await waitFor(async () => (await (await fetch(`http://127.0.0.1:${dport}/json/list`)).json()).find(t => t.type === 'page'), 'the browser', 15000);
 const ws = new WebSocket(target.webSocketDebuggerUrl);
