@@ -187,10 +187,10 @@ pub fn resources(p: &Project) -> Result<String, String> {
             l.capacity,
             money(l.cost, &p.currency)
         );
-        let bad: Vec<(&i64, &(u32, Vec<u32>))> = l.days.iter().filter(|(_, v)| v.0 > l.capacity).collect();
+        let bad: Vec<(&i64, &(u32, i64, Vec<u32>))> = l.days.iter().filter(|(_, v)| v.0 > l.capacity).collect();
         if let (Some(f), Some(e)) = (bad.first(), bad.last()) {
             over += 1;
-            let mut ids: Vec<u32> = bad.iter().flat_map(|(_, v)| v.1.iter().copied()).collect();
+            let mut ids: Vec<u32> = bad.iter().flat_map(|(_, v)| v.2.iter().copied()).collect();
             ids.sort();
             ids.dedup();
             let _ = writeln!(o, "  {RED}⚠ over-allocated on {} day(s), {} → {}, tasks {ids:?}{RST}", bad.len(), fmt_date(*f.0), fmt_date(*e.0));
@@ -269,7 +269,7 @@ pub fn html(p: &Project) -> Result<String, String> {
                 y + 4
             );
         }
-        if let Some((a, b)) = t.baseline {
+        if let Some(Baseline { start: a, finish: b, .. }) = t.baseline() {
             let _ = write!(g, r#"<rect x="{}" y="{}" width="{}" height="3" class="base"/>"#, x(a), y + 20, (x(b) - x(a)).max(2.0));
         }
         for d in &t.deps {

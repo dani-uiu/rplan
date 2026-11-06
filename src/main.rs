@@ -9,6 +9,8 @@
 //! - `server`:   the local web server behind `rplan ui`
 
 mod calendar;
+mod external;
+mod history;
 mod model;
 mod mspdi;
 mod report;
@@ -74,7 +76,9 @@ REPORTS & TOOLS
   rplan show | gantt | resources <file>
   rplan level <file>          delay flexible tasks so nobody is over-booked
   rplan unlevel <file>        remove leveling delays
-  rplan baseline <file> [clear]
+  rplan baseline <file> [0-10] [clear]        save / clear a baseline (0 = the main one)
+  rplan status <file> <DATE|today|none>       measure progress as of this date
+  rplan holidays <file> <CO|ES|MX|UK|US>      add a country's public holidays (repeating)
 
 Durations: 3d, 4h, 30m, 2w, 0 = milestone. Links: 3 (finish-to-start), 3SS, 3FF, 3SF, with lag 3+2d or lead 3-4h.";
 
@@ -125,7 +129,11 @@ fn out(s: &str) {
 }
 
 fn load(path: &str) -> Result<Project, String> {
-    Project::parse(&fs::read_to_string(path).map_err(|e| format!("can't read {path}: {e}"))?)
+    let mut p = Project::parse(&fs::read_to_string(path).map_err(|e| format!("can't read {path}: {e}"))?)?;
+    for w in external::resolve(&mut p, path) {
+        out(&format!("{}warning:{} {w}\n", report::YEL, RST));
+    }
+    Ok(p)
 }
 
 fn save(path: &str, p: &Project) -> Result<(), String> {
@@ -154,7 +162,7 @@ fn subtree_end(p: &Project, i: usize) -> usize {
 
 /// Today's date (UTC) as a day number.
 pub fn today() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64 / 86_400).unwrap_or(0)
+    local_today()
 }
 
 /// An empty project named after its file (`My Project.plan` → "My Project"), starting today.
@@ -252,15 +260,41 @@ fn run() -> Result<(), String> {
         "baseline" => {
             need(2)?;
             let mut p = load(&a[1])?;
-            if a.get(2).map(String::as_str) == Some("clear") {
-                schedule::clear_baseline(&mut p);
-                save(&a[1], &p)?;
-                ok("Baseline cleared");
-            } else {
-                schedule::set_baseline(&mut p)?;
-                save(&a[1], &p)?;
-                ok("Baseline saved");
+            let n: usize = a.iter().skip(2).find_map(|x| x.parse().ok()).unwrap_or(0);
+            if n >= BASELINES {
+                return Err(format!("baselines are numbered 0–{}", BASELINES - 1));
             }
+            if a.iter().any(|x| x == "clear") {
+                schedule::clear_baseline(&mut p, n);
+                save(&a[1], &p)?;
+                ok(&format!("Baseline {n} cleared"));
+            } else {
+                schedule::set_baseline(&mut p, n)?;
+                save(&a[1], &p)?;
+                ok(&format!("Baseline {n} saved"));
+            }
+        }
+        "status" => {
+            need(3)?;
+            let mut p = load(&a[1])?;
+            p.status = if a[2] == "none" { None } else if a[2] == "today" { Some(local_today()) } else { Some(parse_date(&a[2])?) };
+            save(&a[1], &p)?;
+            ok(&p.status.map_or("Status date removed".into(), |d| format!("Status date: {}", fmt_date(d))));
+        }
+        "holidays" => {
+            need(3)?;
+            let mut p = load(&a[1])?;
+            let rules = country_holidays(&a[2]).ok_or_else(|| format!("unknown country '{}' — try {}", a[2], COUNTRIES.iter().map(|c| c.0).collect::<Vec<_>>().join(", ")))?;
+            let mut added = 0;
+            for r in rules {
+                let r = parse_recurring(r)?;
+                if !p.recurring.contains(&r) {
+                    p.recurring.push(r);
+                    added += 1;
+                }
+            }
+            save(&a[1], &p)?;
+            ok(&format!("Added {added} repeating holidays for {}", a[2].to_uppercase()));
         }
         "add" => {
             need(4)?;

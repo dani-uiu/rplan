@@ -280,11 +280,33 @@ pub fn import(xml: &str) -> Result<Project, String> {
                 continue;
             }
             let mut res = Resource::new(&clean(name).replace([',', '[', ']'], " "));
+            res.kind = match r.get("Type") {
+                Some("0") => ResKind::Material,
+                Some("2") => ResKind::Cost,
+                _ => ResKind::Work,
+            };
             res.rate = r.get("StandardRate").and_then(|x| x.parse().ok()).unwrap_or(0.0);
+            res.overtime = r.get("OvertimeRate").and_then(|x| x.parse().ok()).unwrap_or(0.0);
+            res.per_use = r.get("CostPerUse").and_then(|x| x.parse().ok()).unwrap_or(0.0);
+            res.unit = clean(r.get("MaterialLabel").unwrap_or(""));
             res.capacity = r.get("MaxUnits").and_then(|x| x.parse::<f64>().ok()).map(|u| (u * 100.0).round() as u32).filter(|&u| u > 0).unwrap_or(100);
             if let Some(c) = r.get("CalendarUID").and_then(|u| cal_by_uid.get(u)) {
                 if !base.is_some_and(|b| std::ptr::eq(b, *c)) {
                     res.off = calendar_exceptions(c).iter().filter(|e| e.hours.is_empty()).map(|e| (e.from, e.to)).collect();
+                    // A personal working week, if the resource calendar defines one.
+                    if let Some(wd) = c.child("WeekDays") {
+                        let mut week = p.week.clone();
+                        let mut any = false;
+                        for d in wd.all("WeekDay") {
+                            if let Some(t) = d.get("DayType").and_then(|x| x.parse::<usize>().ok()).filter(|t| (1..=7).contains(t)) {
+                                week[t - 1] = if d.get("DayWorking") == Some("1") { working_times(d) } else { vec![] };
+                                any = true;
+                            }
+                        }
+                        if any && week != p.week && week.iter().any(|h| !h.is_empty()) {
+                            res.week = Some(week);
+                        }
+                    }
                 }
             }
             res_name.insert(uid.to_string(), res.name.clone());
@@ -314,12 +336,29 @@ pub fn import(xml: &str) -> Result<Project, String> {
             task.note = clean(t.get("Notes").unwrap_or(""));
             let cdate = t.get("ConstraintDate").and_then(|x| parse_datetime(x).ok());
             task.constraint = match (t.get("ConstraintType"), cdate) {
+                (Some("1"), _) => Constraint::Alap,
                 (Some("2"), Some(d)) => Constraint::Mso(d),
+                (Some("3"), Some(d)) => Constraint::Mfo(d),
                 (Some("4"), Some(d)) => Constraint::Snet(d),
+                (Some("5"), Some(d)) => Constraint::Snlt(d),
                 (Some("6"), Some(d)) => Constraint::Fnet(d),
+                (Some("7"), Some(d)) => Constraint::Fnlt(d),
                 _ => Constraint::Asap,
             };
             task.deadline = t.get("Deadline").and_then(day_of);
+            let when = |k: &str| t.get(k).and_then(|x| parse_datetime(x).ok());
+            task.actual_start = when("ActualStart");
+            task.actual_finish = when("ActualFinish");
+            task.actual_cost = t.get("ActualCost").and_then(|x| x.parse::<f64>().ok()).filter(|c| *c > 0.0);
+            task.priority = t.get("Priority").and_then(|x| x.parse::<u32>().ok()).unwrap_or(500).min(1000);
+            task.inactive = t.get("Active") == Some("0");
+            if t.get("Manual") == Some("1") && !summary {
+                task.manual = when("ManualStart").or_else(|| when("Start"));
+            }
+            // Fixed work (type 2) or effort-driven tasks keep their total work.
+            if !summary && (t.get("Type") == Some("2") || t.get("EffortDriven") == Some("1")) {
+                task.work = t.get("Work").map(|w| parse_iso_dur(w, p.day_minutes)).filter(|w| *w > 0);
+            }
             // LevelingDelay is stored in tenths of minutes.
             task.delay = t.get("LevelingDelay").and_then(|x| x.parse::<f64>().ok()).map(|x| (x / 10.0).round() as i64).unwrap_or(0).max(0);
             for l in t.all("PredecessorLink") {
@@ -331,12 +370,17 @@ pub fn import(xml: &str) -> Result<Project, String> {
                     _ => Link::FS,
                 };
                 let lag = l.get("LinkLag").and_then(|x| x.parse::<f64>().ok()).map(|x| (x / 10.0).round() as i64).unwrap_or(0);
-                task.deps.push(Dep { id: pid, kind, lag });
+                // LagFormat 5–12 are working units; elapsed ones are 4,6,8,10,12 (+ the "?" variants).
+                let elapsed = matches!(l.get("LagFormat"), Some("4" | "6" | "8" | "10" | "12" | "36" | "38" | "40" | "42" | "44"));
+                task.deps.push(Dep { id: pid, kind, lag, elapsed });
             }
             for b in t.all("Baseline") {
-                if b.get("Number").unwrap_or("0") == "0" {
+                let n: usize = b.get("Number").and_then(|x| x.parse().ok()).unwrap_or(0);
+                if n < BASELINES {
                     if let (Some(s), Some(f)) = (b.get("Start").and_then(|x| parse_datetime(x).ok()), b.get("Finish").and_then(|x| parse_datetime(x).ok())) {
-                        task.baseline = Some((s, f));
+                        let cost = b.get("Cost").and_then(|x| x.parse().ok()).unwrap_or(0.0);
+                        let work = b.get("Work").map(|w| parse_iso_dur(w, p.day_minutes)).unwrap_or(0);
+                        task.baselines[n] = Some(Baseline { start: s, finish: f, cost, work });
                     }
                 }
             }
@@ -348,10 +392,17 @@ pub fn import(xml: &str) -> Result<Project, String> {
         for a in asg.all("Assignment") {
             let (Some(tu), Some(ru)) = (a.get("TaskUID"), a.get("ResourceUID")) else { continue };
             let Some(name) = res_name.get(ru) else { continue };
-            let units = a.get("Units").and_then(|x| x.parse::<f64>().ok()).map(|u| (u * 100.0).round() as u32).filter(|&u| u > 0).unwrap_or(100);
+            let raw = a.get("Units").and_then(|x| x.parse::<f64>().ok()).unwrap_or(1.0);
+            let kind = p.resources.iter().find(|r| &r.name == name).map(|r| r.kind).unwrap_or(ResKind::Work);
+            let asg = match kind {
+                ResKind::Work => Assign::person(name, ((raw * 100.0).round() as u32).max(1)),
+                // Materials: units are the quantity. Cost resources: the amount is in <Cost>.
+                ResKind::Material => Assign { name: name.clone(), units: 100, amount: raw, form: Form::Qty },
+                ResKind::Cost => Assign { name: name.clone(), units: 100, amount: a.get("Cost").and_then(|x| x.parse().ok()).unwrap_or(0.0), form: Form::Money },
+            };
             if let Some((_, t)) = tasks.iter_mut().find(|(u, _)| u == tu) {
                 if !t.who.iter().any(|w| &w.name == name) {
-                    t.who.push(Assign { name: name.clone(), units });
+                    t.who.push(asg);
                 }
             }
         }
@@ -361,7 +412,8 @@ pub fn import(xml: &str) -> Result<Project, String> {
     for t in &mut p.tasks {
         t.deps.retain(|d| ids.contains(&d.id) && d.id != t.id);
     }
-    p.start = start.unwrap_or_else(|| p.tasks.iter().filter_map(|t| t.baseline.map(|b| b.0.div_euclid(DAY))).min().unwrap_or(0));
+    p.start = start.unwrap_or_else(|| p.tasks.iter().filter_map(|t| t.baseline().map(|b| b.start.div_euclid(DAY))).min().unwrap_or(0));
+    p.status = root.get("StatusDate").and_then(day_of);
     p.normalize();
     p.calendar()?;
     Ok(p)
@@ -393,6 +445,13 @@ pub fn export(p: &Project) -> Result<String, String> {
     tag(&mut x, "MinutesPerDay", &dm.to_string());
     tag(&mut x, "MinutesPerWeek", &(dm * 5).to_string());
     tag(&mut x, "DaysPerMonth", "20");
+    if let Some(st) = p.status {
+        tag(&mut x, "StatusDate", &format!("{}T17:00:00", fmt_date(st)));
+    }
+    // Repeating holidays are written out as dated exceptions for the project's years.
+    let (y0, y1) = (civil_from_days(p.start).0, civil_from_days(s.finish.div_euclid(DAY)).0 + 1);
+    let mut all_ex = p.exceptions.clone();
+    all_ex.extend(expand_recurring(&p.recurring, y0..=y1));
 
     let times = |x: &mut String, h: &Hours| {
         if h.is_empty() {
@@ -423,9 +482,9 @@ pub fn export(p: &Project) -> Result<String, String> {
         x.push_str("</WeekDay>");
     }
     x.push_str("</WeekDays>");
-    if !p.exceptions.is_empty() {
+    if !all_ex.is_empty() {
         x.push_str("<Exceptions>");
-        for e in &p.exceptions {
+        for e in &all_ex {
             exception(&mut x, e);
         }
         x.push_str("</Exceptions>");
@@ -434,6 +493,15 @@ pub fn export(p: &Project) -> Result<String, String> {
     let people = p.all_resources();
     for (k, r) in people.iter().enumerate() {
         let _ = write!(x, "<Calendar><UID>{}</UID><Name>{}</Name><IsBaseCalendar>0</IsBaseCalendar><BaseCalendarUID>1</BaseCalendarUID>", k + 2, xml_esc(&r.name));
+        if let Some(w) = &r.week {
+            x.push_str("<WeekDays>");
+            for (i, h) in w.iter().enumerate() {
+                let _ = write!(x, "<WeekDay><DayType>{}</DayType><DayWorking>{}</DayWorking>", i + 1, if h.is_empty() { 0 } else { 1 });
+                times(&mut x, h);
+                x.push_str("</WeekDay>");
+            }
+            x.push_str("</WeekDays>");
+        }
         if !r.off.is_empty() {
             x.push_str("<Exceptions>");
             for &(a, b) in &r.off {
@@ -453,21 +521,26 @@ pub fn export(p: &Project) -> Result<String, String> {
     );
     for (i, t) in p.tasks.iter().enumerate() {
         let sc = s.tasks[i];
-        let dur = if summary[i] { sc.span } else { t.dur };
+        let dur = if summary[i] { sc.span } else { sc.dur };
         x.push_str("<Task>");
         tag(&mut x, "UID", &t.id.to_string());
         tag(&mut x, "ID", &(i + 1).to_string());
         tag(&mut x, "Name", &t.name);
-        tag(&mut x, "Type", "1");
+        tag(&mut x, "Type", if t.work.is_some() { "2" } else { "1" });
         tag(&mut x, "IsNull", "0");
         tag(&mut x, "WBS", &wbs[i]);
         tag(&mut x, "OutlineNumber", &wbs[i]);
         tag(&mut x, "OutlineLevel", &(t.level + 1).to_string());
-        tag(&mut x, "Priority", "500");
+        tag(&mut x, "Priority", &t.priority.to_string());
         tag(&mut x, "Start", &iso_dt(sc.es));
         tag(&mut x, "Finish", &iso_dt(sc.ef));
         tag(&mut x, "Duration", &iso_dur(dur));
-        tag(&mut x, "DurationFormat", "7");
+        if let Some(m) = t.manual {
+            tag(&mut x, "ManualStart", &iso_dt(m));
+        }
+        tag(&mut x, "DurationFormat", if t.elapsed { "8" } else { "7" });
+        tag(&mut x, "Work", &iso_dur(sc.work));
+        tag(&mut x, "EffortDriven", if t.work.is_some() { "1" } else { "0" });
         tag(&mut x, "Milestone", if !summary[i] && t.dur == 0 { "1" } else { "0" });
         tag(&mut x, "Summary", if summary[i] { "1" } else { "0" });
         tag(&mut x, "Critical", if sc.crit { "1" } else { "0" });
@@ -479,11 +552,24 @@ pub fn export(p: &Project) -> Result<String, String> {
         tag(&mut x, "FixedCost", &t.cost.to_string());
         tag(&mut x, "PercentComplete", &(sc.pct.round() as i64).to_string());
         tag(&mut x, "Cost", &format!("{:.2}", sc.cost));
+        if let Some(a) = t.actual_start {
+            tag(&mut x, "ActualStart", &iso_dt(a));
+        }
+        if let Some(a) = t.actual_finish {
+            tag(&mut x, "ActualFinish", &iso_dt(a));
+        }
+        if let Some(c) = t.actual_cost {
+            tag(&mut x, "ActualCost", &format!("{c:.2}"));
+        }
         let (ct, cd) = match t.constraint {
             Constraint::Asap => ("0", None),
+            Constraint::Alap => ("1", None),
             Constraint::Mso(d) => ("2", Some(d)),
+            Constraint::Mfo(d) => ("3", Some(d)),
             Constraint::Snet(d) => ("4", Some(d)),
+            Constraint::Snlt(d) => ("5", Some(d)),
             Constraint::Fnet(d) => ("6", Some(d)),
+            Constraint::Fnlt(d) => ("7", Some(d)),
         };
         tag(&mut x, "ConstraintType", ct);
         if let Some(d) = cd {
@@ -499,6 +585,8 @@ pub fn export(p: &Project) -> Result<String, String> {
         if !t.note.is_empty() {
             tag(&mut x, "Notes", &t.note);
         }
+        tag(&mut x, "Active", if t.inactive { "0" } else { "1" });
+        tag(&mut x, "Manual", if t.manual.is_some() { "1" } else { "0" });
         for d in &t.deps {
             let ty = match d.kind {
                 Link::FF => 0,
@@ -508,26 +596,45 @@ pub fn export(p: &Project) -> Result<String, String> {
             };
             let _ = write!(
                 x,
-                "<PredecessorLink><PredecessorUID>{}</PredecessorUID><Type>{ty}</Type><CrossProject>0</CrossProject><LinkLag>{}</LinkLag><LagFormat>7</LagFormat></PredecessorLink>",
+                "<PredecessorLink><PredecessorUID>{}</PredecessorUID><Type>{ty}</Type><CrossProject>0</CrossProject><LinkLag>{}</LinkLag><LagFormat>{}</LagFormat></PredecessorLink>",
                 d.id,
-                d.lag * 10
+                d.lag * 10,
+                if d.elapsed { 8 } else { 7 }
             );
         }
-        if let Some((a, b)) = t.baseline {
-            let _ = write!(x, "<Baseline><Number>0</Number><Start>{}</Start><Finish>{}</Finish><Duration>{}</Duration></Baseline>", iso_dt(a), iso_dt(b), iso_dur(dur));
+        for (n, b) in t.baselines.iter().enumerate() {
+            if let Some(b) = b {
+                let _ = write!(
+                    x,
+                    "<Baseline><Number>{n}</Number><Start>{}</Start><Finish>{}</Finish><Duration>{}</Duration><Work>{}</Work><Cost>{:.2}</Cost></Baseline>",
+                    iso_dt(b.start),
+                    iso_dt(b.finish),
+                    iso_dur(dur),
+                    iso_dur(b.work),
+                    b.cost
+                );
+            }
         }
         x.push_str("</Task>");
     }
     x.push_str("</Tasks><Resources>");
     for (k, r) in people.iter().enumerate() {
+        let ty = match r.kind {
+            ResKind::Material => 0,
+            ResKind::Work => 1,
+            ResKind::Cost => 2,
+        };
+        let label = if r.unit.is_empty() { String::new() } else { format!("<MaterialLabel>{}</MaterialLabel>", xml_esc(&r.unit)) };
         let _ = write!(
             x,
-            "<Resource><UID>{0}</UID><ID>{0}</ID><Name>{1}</Name><Type>1</Type><IsNull>0</IsNull><MaxUnits>{2:.2}</MaxUnits><StandardRate>{3}</StandardRate><StandardRateFormat>2</StandardRateFormat><CalendarUID>{4}</CalendarUID></Resource>",
+            "<Resource><UID>{0}</UID><ID>{0}</ID><Name>{1}</Name><Type>{ty}</Type><IsNull>0</IsNull>{label}<MaxUnits>{2:.2}</MaxUnits><StandardRate>{3}</StandardRate><StandardRateFormat>2</StandardRateFormat><OvertimeRate>{5}</OvertimeRate><OvertimeRateFormat>2</OvertimeRateFormat><CostPerUse>{6}</CostPerUse><CalendarUID>{4}</CalendarUID></Resource>",
             k + 1,
             xml_esc(&r.name),
             r.capacity as f64 / 100.0,
             r.rate,
-            k + 2
+            k + 2,
+            r.overtime,
+            r.per_use
         );
     }
     x.push_str("</Resources><Assignments>");
@@ -538,15 +645,19 @@ pub fn export(p: &Project) -> Result<String, String> {
         }
         for a in &t.who {
             let Some(k) = people.iter().position(|r| r.name == a.name) else { continue };
+            let (units, work, cost) = match people[k].kind {
+                ResKind::Work => (a.units as f64 / 100.0, s.tasks[i].dur * a.units as i64 / 100, String::new()),
+                ResKind::Material => (a.amount, 0, String::new()),
+                ResKind::Cost => (1.0, 0, format!("<Cost>{:.2}</Cost>", a.amount)),
+            };
             let _ = write!(
                 x,
-                "<Assignment><UID>{uid}</UID><TaskUID>{}</TaskUID><ResourceUID>{}</ResourceUID><Finish>{}</Finish><Start>{}</Start><Units>{:.2}</Units><Work>{}</Work></Assignment>",
+                "<Assignment><UID>{uid}</UID><TaskUID>{}</TaskUID><ResourceUID>{}</ResourceUID>{cost}<Finish>{}</Finish><Start>{}</Start><Units>{units:.4}</Units><Work>{}</Work></Assignment>",
                 t.id,
                 k + 1,
                 iso_dt(s.tasks[i].ef),
                 iso_dt(s.tasks[i].es),
-                a.units as f64 / 100.0,
-                iso_dur(t.dur * a.units as i64 / 100)
+                iso_dur(work)
             );
             uid += 1;
         }
@@ -620,7 +731,7 @@ task 4 | Done | 0 | 3FF-30m
         let p = import(xml).unwrap();
         assert_eq!(p.name, "libre");
         assert_eq!(p.tasks.len(), 2);
-        assert_eq!(p.tasks[1].deps, vec![Dep { id: 5, kind: Link::FS, lag: 480 }]);
+        assert_eq!(p.tasks[1].deps, vec![Dep { id: 5, kind: Link::FS, lag: 480, elapsed: false }]);
         assert_eq!(p.tasks[1].who[0].name, "Dev");
         assert!(p.tasks[0].who.is_empty());
         assert!(import("<html></html>").is_err());

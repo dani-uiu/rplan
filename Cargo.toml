@@ -9,3 +9,9 @@ description = "Fast, plain-text project scheduler: critical path, Gantt, resourc
 [profile.release]
 opt-level = 3
 lto = true
+
+# Windows Smart App Control judges each new unsigned binary separately and
+# sometimes blocks the unoptimized test binary; these settings get past it here.
+[profile.test]
+opt-level = 1
+codegen-units = 4

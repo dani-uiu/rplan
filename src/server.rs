@@ -11,7 +11,7 @@ use crate::calendar::*;
 use crate::model::*;
 use crate::report::{BLD, DIM, GRN, RST};
 use crate::schedule::*;
-use crate::{mspdi, report};
+use crate::{history, mspdi, report};
 use std::collections::hash_map::RandomState;
 use std::fmt::Write as _;
 use std::hash::{BuildHasher, Hasher};
@@ -213,7 +213,7 @@ fn num(x: f64) -> String {
 }
 
 /// Project, computed schedule and workloads as JSON for the UI.
-/// Times are minutes since midnight of the project start day.
+/// Times are minutes since midnight of the project start day; days are offsets from it.
 pub fn project_json(p: &Project, path: &str) -> Result<String, String> {
     let s = schedule(p)?;
     let t0 = p.start * DAY;
@@ -222,35 +222,57 @@ pub fn project_json(p: &Project, path: &str) -> Result<String, String> {
     let rel = |t: i64| t - t0;
     let dayoff = |d: i64| d - p.start;
     let hours = |h: &Hours| format!("[{}]", h.iter().map(|(a, b)| format!("[{a},{b}]")).collect::<Vec<_>>().join(","));
+    let week = |w: &[Hours; 7]| format!("[{}]", w.iter().map(hours).collect::<Vec<_>>().join(","));
+    let ranges = |r: &[(i64, i64)]| format!("[{}]", r.iter().map(|(a, b)| format!("[{},{}]", dayoff(*a), dayoff(*b))).collect::<Vec<_>>().join(","));
+    let opt = |v: Option<i64>| v.map_or("null".to_string(), |x| x.to_string());
     let mut o = String::new();
     let _ = write!(
         o,
-        r#"{{"ok":true,"path":{},"rev":"{}","name":{},"start":"{}","currency":{},"dayMinutes":{},"week":[{}],"exceptions":[{}],"#,
+        r#"{{"ok":true,"path":{},"rev":"{}","name":{},"start":"{}","status":{},"currency":{},"dayMinutes":{},"pool":{},"week":{},"exceptions":[{}],"recurring":[{}],"calendars":[{}],"warnings":[{}],"#,
         js(path),
         rev(path),
         js(&p.name),
         fmt_date(p.start),
+        opt(p.status.map(dayoff)),
         js(&p.currency),
         p.day_minutes,
-        p.week.iter().map(hours).collect::<Vec<_>>().join(","),
+        p.pool.as_deref().map_or("null".into(), js),
+        week(&p.week),
         p.exceptions
             .iter()
             .map(|e| format!(r#"{{"from":{},"to":{},"name":{},"hours":{}}}"#, dayoff(e.from), dayoff(e.to), js(&e.name), hours(&e.hours)))
             .collect::<Vec<_>>()
-            .join(",")
+            .join(","),
+        p.recurring.iter().map(|r| js(&fmt_recurring(r))).collect::<Vec<_>>().join(","),
+        p.calendars.iter().map(|c| format!(r#"{{"name":{},"week":{}}}"#, js(&c.name), week(&c.week))).collect::<Vec<_>>().join(","),
+        p.warnings.iter().map(|w| js(w)).collect::<Vec<_>>().join(",")
     );
-    let declared: Vec<&str> = p.resources.iter().map(|r| r.name.as_str()).collect();
+    // Concrete holiday dates (dated + repeating) within the project's years, for drawing.
+    let (y0, y1) = (civil_from_days(p.start).0 - 1, civil_from_days(s.finish.div_euclid(DAY)).0 + 2);
+    let holidays: Vec<String> = expand_recurring(&p.recurring, y0..=y1).iter().map(|e| format!("[{},{}]", dayoff(e.from), js(&e.name))).collect();
+    let _ = write!(o, r#""holidays":[{}],"#, holidays.join(","));
+    let declared: Vec<&str> = p.resources.iter().filter(|r| !r.pooled).map(|r| r.name.as_str()).collect();
     let ress: Vec<String> = p
         .all_resources()
         .iter()
         .map(|r| {
             format!(
-                r#"{{"name":{},"rate":{},"capacity":{},"declared":{},"off":[{}]}}"#,
+                r#"{{"name":{},"kind":"{}","rate":{},"capacity":{},"declared":{},"pooled":{},"perUse":{},"overtime":{},"unit":{},"week":{},"off":{}}}"#,
                 js(&r.name),
+                match r.kind {
+                    ResKind::Work => "work",
+                    ResKind::Material => "material",
+                    ResKind::Cost => "cost",
+                },
                 num(r.rate),
                 r.capacity,
                 declared.contains(&r.name.as_str()),
-                r.off.iter().map(|(a, b)| format!("[{},{}]", dayoff(*a), dayoff(*b))).collect::<Vec<_>>().join(",")
+                r.pooled,
+                num(r.per_use),
+                num(r.overtime),
+                js(&r.unit),
+                r.week.as_ref().map_or("null".into(), week),
+                ranges(&r.off)
             )
         })
         .collect();
@@ -260,47 +282,71 @@ pub fn project_json(p: &Project, path: &str) -> Result<String, String> {
             let days: Vec<String> = l
                 .days
                 .iter()
-                .map(|(d, (u, ids))| format!("[{},{u},[{}]]", dayoff(*d), ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",")))
+                .map(|(d, (u, m, ids))| format!("[{},{u},{m},[{}]]", dayoff(*d), ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",")))
                 .collect();
-            format!(
-                r#"{{"name":{},"capacity":{},"work":{},"cost":{},"tasks":{},"over":{},"days":[{}]}}"#,
-                js(&l.name),
-                l.capacity,
-                l.work,
-                num(l.cost),
-                l.tasks,
-                l.over_days,
-                days.join(",")
-            )
+            format!(r#"{{"name":{},"capacity":{},"work":{},"cost":{},"tasks":{},"over":{},"days":[{}]}}"#, js(&l.name), l.capacity, l.work, num(l.cost), l.tasks, l.over_days, days.join(","))
+        })
+        .collect();
+    let others: Vec<String> = crate::external::other_loads(p, path)
+        .iter()
+        .map(|(name, days)| {
+            let mut d: Vec<(&i64, &(u32, i64, Vec<String>))> = days.iter().collect();
+            d.sort_by_key(|x| *x.0);
+            let d: Vec<String> = d.iter().map(|(day, (u, m, projects))| format!("[{},{u},{m},[{}]]", dayoff(**day), projects.iter().map(|x| js(x)).collect::<Vec<_>>().join(","))).collect();
+            format!(r#"{{"name":{},"days":[{}]}}"#, js(name), d.join(","))
         })
         .collect();
     let _ = write!(
         o,
-        r#""resources":[{}],"loads":[{}],"startT":{},"finish":{},"finishDate":"{}","span":{},"progress":{},"cost":{},"critical":[{}],"text":{},"tasks":["#,
+        r#""resources":[{}],"loads":[{}],"otherLoads":[{}],"startT":{},"finish":{},"finishDate":"{}","span":{},"progress":{},"cost":{},"work":{},"ev":{{"bac":{},"pv":{},"ev":{},"ac":{}}},"critical":[{}],"text":{},"tasks":["#,
         ress.join(","),
         lds.join(","),
+        others.join(","),
         rel(s.start),
         rel(s.finish),
         fmt_date((s.finish - 1).div_euclid(DAY).max(p.start)),
         cal.work_between(s.start, s.finish),
         num(s.progress),
         num(s.cost),
+        s.work,
+        num(s.ev.bac),
+        num(s.ev.pv),
+        num(s.ev.ev),
+        num(s.ev.ac),
         s.critical.iter().map(u32::to_string).collect::<Vec<_>>().join(","),
         js(&p.serialize())
     );
     for (i, t) in p.tasks.iter().enumerate() {
         let sc = s.tasks[i];
-        let deps: Vec<String> = t.deps.iter().map(|d| format!(r#"{{"id":{},"kind":"{}","lag":{}}}"#, d.id, d.kind.as_str(), d.lag)).collect();
-        let who: Vec<String> = t.who.iter().map(|a| format!(r#"{{"name":{},"units":{}}}"#, js(&a.name), a.units)).collect();
+        let deps: Vec<String> = t.deps.iter().map(|d| format!(r#"{{"id":{},"kind":"{}","lag":{},"elapsed":{}}}"#, d.id, d.kind.as_str(), d.lag, d.elapsed)).collect();
+        let who: Vec<String> = t
+            .who
+            .iter()
+            .map(|a| {
+                let form = match a.form {
+                    Form::Pct => "pct",
+                    Form::Qty => "qty",
+                    Form::Money => "money",
+                };
+                format!(r#"{{"name":{},"units":{},"amount":{},"form":"{form}"}}"#, js(&a.name), a.units, num(a.amount))
+            })
+            .collect();
         let cons = match t.constraint {
             Constraint::Asap => "null".to_string(),
-            Constraint::Snet(x) => format!(r#"{{"type":"snet","at":{}}}"#, rel(x)),
-            Constraint::Fnet(x) => format!(r#"{{"type":"fnet","at":{}}}"#, rel(x)),
-            Constraint::Mso(x) => format!(r#"{{"type":"mso","at":{}}}"#, rel(x)),
+            c => format!(r#"{{"type":"{}","at":{}}}"#, c.code(), opt(c.date().map(rel))),
         };
+        let baselines: Vec<String> = t
+            .baselines
+            .iter()
+            .enumerate()
+            .filter_map(|(n, b)| b.map(|b| format!(r#"{{"n":{n},"s":{},"f":{},"cost":{},"work":{}}}"#, rel(b.start), rel(b.finish), num(b.cost), b.work)))
+            .collect();
+        let sub_info = t.sub_info.as_ref().map_or("null".into(), |x| format!(r#"{{"name":{},"span":{},"cost":{},"pct":{},"tasks":{}}}"#, js(&x.name), x.span, num(x.cost), num(x.pct), x.tasks));
+        let xdeps: Vec<String> = t.xdeps.iter().map(|x| format!(r#"{{"file":{},"id":{},"kind":"{}","lag":{}}}"#, js(&x.file), x.id, x.kind.as_str(), x.lag)).collect();
+        let ext: Vec<String> = t.ext.iter().map(|x| format!(r#"{{"label":{},"es":{},"ef":{}}}"#, js(&x.label), rel(x.es), rel(x.ef))).collect();
         let _ = write!(
             o,
-            r#"{}{{"id":{},"name":{},"level":{},"wbs":"{}","summary":{},"dur":{},"deps":[{}],"who":[{}],"pct":{},"pctR":{},"constraint":{cons},"deadline":{},"fixed":{},"cost":{},"delay":{},"base":{},"note":{},"es":{},"ef":{},"ls":{},"lf":{},"slack":{},"crit":{},"late":{},"conflict":{},"span":{},"slip":{}}}"#,
+            r#"{}{{"id":{},"name":{},"level":{},"wbs":"{}","summary":{},"dur":{},"edur":{},"elapsed":{},"work":{},"workT":{},"deps":[{}],"who":[{}],"pct":{},"pctR":{},"constraint":{cons},"deadline":{},"fixed":{},"cost":{},"delay":{},"base":{},"baselines":[{}],"note":{},"es":{},"ef":{},"ls":{},"lf":{},"slack":{},"free":{},"crit":{},"late":{},"conflict":{},"span":{},"slip":{},"as":{},"af":{},"ac":{},"ot":{},"splits":{},"manual":{},"inactive":{},"priority":{},"cal":{},"sub":{},"subInfo":{sub_info},"xdeps":[{}],"ext":[{}],"done":{},"started":{},"bac":{},"pv":{},"ev":{},"acv":{}}}"#,
             if i > 0 { "," } else { "" },
             t.id,
             js(&t.name),
@@ -308,6 +354,10 @@ pub fn project_json(p: &Project, path: &str) -> Result<String, String> {
             wbs[i],
             sc.summary,
             t.dur,
+            sc.dur,
+            t.elapsed,
+            opt(t.work),
+            sc.work,
             deps.join(","),
             who.join(","),
             t.pct,
@@ -316,30 +366,81 @@ pub fn project_json(p: &Project, path: &str) -> Result<String, String> {
             num(t.cost),
             num(sc.cost),
             t.delay,
-            t.baseline.map_or("null".into(), |(a, b)| format!("[{},{}]", rel(a), rel(b))),
+            t.baseline().map_or("null".into(), |b| format!("[{},{}]", rel(b.start), rel(b.finish))),
+            baselines.join(","),
             js(&t.note),
             rel(sc.es),
             rel(sc.ef),
             rel(sc.ls),
             rel(sc.lf),
             sc.slack,
+            sc.free_slack,
             sc.crit,
             sc.late,
             sc.conflict,
             sc.span,
-            t.baseline.map_or("null".into(), |(_, bf)| cal.work_between(bf, sc.ef).to_string())
+            t.baseline().map_or("null".into(), |b| cal.work_between(b.finish, sc.ef).to_string()),
+            opt(t.actual_start.map(rel)),
+            opt(t.actual_finish.map(rel)),
+            t.actual_cost.map_or("null".into(), num),
+            t.overtime,
+            ranges(&t.splits),
+            opt(t.manual.map(rel)),
+            sc.inactive,
+            t.priority,
+            t.cal.as_deref().map_or("null".into(), js),
+            t.sub.as_deref().map_or("null".into(), js),
+            xdeps.join(","),
+            ext.join(","),
+            sc.done,
+            sc.started,
+            num(sc.bac),
+            num(sc.pv),
+            num(sc.ev),
+            num(sc.ac)
         );
     }
     o.push_str("]}");
     Ok(o)
 }
 
+/// Work minutes per day, by task and by person, for the usage views.
+pub fn usage_json(p: &Project) -> Result<String, String> {
+    let s = schedule(p)?;
+    let u = task_usage(p, &s)?;
+    let days = |v: &[(i64, i64)], f: f64| v.iter().map(|(d, m)| format!("[{},{}]", d - p.start, (*m as f64 * f).round() as i64)).collect::<Vec<_>>().join(",");
+    let tasks: Vec<String> = p.tasks.iter().zip(&u).filter(|(_, v)| !v.is_empty()).map(|(t, v)| format!("[{},[{}]]", t.id, days(v, 1.0))).collect();
+    let mut people: Vec<String> = vec![];
+    for r in p.all_resources().iter().filter(|r| r.kind == ResKind::Work) {
+        let mut rows = vec![];
+        for (t, v) in p.tasks.iter().zip(&u) {
+            let Some(a) = t.who.iter().find(|a| a.name == r.name) else { continue };
+            let total: f64 = t.who.iter().filter(|x| p.resource(&x.name).kind == ResKind::Work).map(|x| x.units as f64).sum();
+            if total > 0.0 && !v.is_empty() {
+                rows.push(format!("[{},[{}]]", t.id, days(v, a.units as f64 / total)));
+            }
+        }
+        people.push(format!(r#"{{"name":{},"tasks":[{}]}}"#, js(&r.name), rows.join(",")));
+    }
+    Ok(format!(r#"{{"ok":true,"tasks":[{}],"people":[{}]}}"#, tasks.join(","), people.join(",")))
+}
+
 fn load(path: &str) -> Result<Project, String> {
-    Project::parse(&fs::read_to_string(path).map_err(|e| format!("can't read {path}: {e}"))?)
+    let mut p = Project::parse(&fs::read_to_string(path).map_err(|e| format!("can't read {path}: {e}"))?)?;
+    p.warnings = crate::external::resolve(&mut p, path);
+    Ok(p)
 }
 
 fn save(path: &str, p: &Project) -> Result<(), String> {
+    save_noted(path, p, "Edit", false)
+}
+
+/// Saves atomically, first remembering the old version in the history.
+fn save_noted(path: &str, p: &Project, note: &str, force: bool) -> Result<(), String> {
     schedule(p)?; // never write a plan that can't be scheduled
+    if let Ok(old) = fs::read_to_string(path) {
+        history::record(path, &old, note, force);
+    }
     let tmp = format!("{path}.tmp");
     fs::write(&tmp, p.serialize()).map_err(|e| format!("can't write {tmp}: {e}"))?;
     fs::rename(&tmp, path).map_err(|e| format!("can't replace {path}: {e}"))
@@ -402,10 +503,17 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
         }
         reply(load(path).and_then(|mut p| {
             let note = f(&mut p)?;
-            save(path, &p)?;
+            // Big one-click changes always get their own history entry.
+            save_noted(path, &p, &note, true)?;
             let j = project_json(&p, path)?;
             Ok(format!(r#"{},"note":{}}}"#, &j[..j.len() - 1], js(&note)))
         }))
+    };
+    let param = |name: &str| req.param(name).and_then(|v| v.parse::<usize>().ok());
+    let parse_resolved = |text: &str| -> Result<Project, String> {
+        let mut p = Project::parse(text)?;
+        p.warnings = crate::external::resolve(&mut p, path);
+        Ok(p)
     };
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => {
@@ -454,8 +562,9 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
             if let Some(r) = stale() {
                 return r;
             }
-            reply(Project::parse(&req.body).and_then(|p| {
-                save(path, &p)?;
+            let note = req.header("X-Rplan-Note").unwrap_or("Edit").to_string();
+            reply(parse_resolved(&req.body).and_then(|p| {
+                save_noted(path, &p, &note, req.header("X-Rplan-Force").is_some())?;
                 project_json(&p, path)
             }))
         }
@@ -464,7 +573,51 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
                 return r;
             }
             reply(mspdi::import(&req.body).and_then(|p| {
-                save(path, &p)?;
+                let mut p = parse_resolved(&p.serialize())?;
+                p.warnings.retain(|_| true);
+                save_noted(path, &p, "Import", true)?;
+                project_json(&p, path)
+            }))
+        }
+        ("GET", "/api/usage") => reply(load(path).and_then(|p| usage_json(&p))),
+        ("GET", "/api/holidays") => {
+            let list: Vec<String> = COUNTRIES
+                .iter()
+                .map(|(code, name)| format!(r#"{{"code":"{code}","name":{},"rules":[{}]}}"#, js(name), country_holidays(code).unwrap_or(&[]).iter().map(|r| js(r)).collect::<Vec<_>>().join(",")))
+                .collect();
+            Resp::json(200, format!(r#"{{"ok":true,"countries":[{}]}}"#, list.join(",")))
+        }
+        ("GET", "/api/history") => {
+            let list: Vec<String> = history::entries(path)
+                .iter()
+                .enumerate()
+                .map(|(n, e)| {
+                    let name = e.text.lines().find_map(|l| l.strip_prefix("project ")).unwrap_or("").trim();
+                    let tasks = e.text.lines().filter(|l| l.trim_start().starts_with("task ")).count();
+                    format!(r#"{{"n":{n},"ms":{},"note":{},"name":{},"tasks":{tasks},"size":{}}}"#, e.ms, js(&e.note), js(name), e.text.len())
+                })
+                .collect();
+            Resp::json(200, format!(r#"{{"ok":true,"entries":[{}]}}"#, list.join(",")))
+        }
+        ("GET", "/api/history/diff") => {
+            let entries = history::entries(path);
+            let Some(e) = param("n").and_then(|n| entries.get(n)) else { return Resp::err(400, "no such version") };
+            let current = fs::read_to_string(path).unwrap_or_default();
+            reply(history::diff(&e.text, &current).map(|d| {
+                let list = |v: &[String]| v.iter().map(|x| js(x)).collect::<Vec<_>>().join(",");
+                let changed: Vec<String> = d.changed.iter().map(|(t, f)| format!(r#"{{"task":{},"fields":[{}]}}"#, js(t), list(f))).collect();
+                // "added" = in the current file but not in that version, i.e. restoring removes them.
+                format!(r#"{{"ok":true,"added":[{}],"removed":[{}],"changed":[{}],"settings":{},"text":{}}}"#, list(&d.added), list(&d.removed), changed.join(","), d.settings, js(&e.text))
+            }))
+        }
+        ("POST", "/api/history/restore") => {
+            if let Some(r) = stale() {
+                return r;
+            }
+            let entries = history::entries(path);
+            let Some(e) = param("n").and_then(|n| entries.get(n)) else { return Resp::err(400, "no such version") };
+            reply(parse_resolved(&e.text).and_then(|p| {
+                save_noted(path, &p, "Restore an earlier version", true)?;
                 project_json(&p, path)
             }))
         }
@@ -473,11 +626,17 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
             Ok(if n == 0 { "Nothing to level — nobody is over-allocated ✓".into() } else { format!("Leveled: delayed {n} task(s) so nobody is double-booked") })
         }),
         ("POST", "/api/unlevel") => mutate(&|p| Ok(format!("Removed leveling delays from {} task(s)", clear_leveling(p)))),
-        ("POST", "/api/baseline") => mutate(&|p| set_baseline(p).map(|_| "Baseline saved — later changes show as slips".into())),
-        ("POST", "/api/baseline/clear") => mutate(&|p| {
-            clear_baseline(p);
-            Ok("Baseline cleared".into())
-        }),
+        ("POST", "/api/baseline") => {
+            let n = param("n").unwrap_or(0).min(BASELINES - 1);
+            mutate(&|p| set_baseline(p, n).map(|_| if n == 0 { "Baseline saved — later changes show as slips".into() } else { format!("Saved baseline {n}") }))
+        }
+        ("POST", "/api/baseline/clear") => {
+            let n = param("n").unwrap_or(0).min(BASELINES - 1);
+            mutate(&|p| {
+                clear_baseline(p, n);
+                Ok(if n == 0 { "Baseline cleared".into() } else { format!("Baseline {n} cleared") })
+            })
+        }
         ("POST", "/api/new") => mutate(&|p| {
             // Start fresh but keep the working week, hours per day and currency.
             let mut b = crate::blank_project(path);
