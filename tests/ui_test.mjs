@@ -98,6 +98,13 @@ await test('loads the project with summaries, KPIs and critical path', async () 
   await shot('01-gantt');
 });
 
+await test('favicon loads (ICO and SVG) under the page’s security policy', async () => {
+  const load = src => js(`new Promise(r => { const i = new Image(); i.onload = () => r(i.naturalWidth); i.onerror = () => r(0); i.src = ${JSON.stringify(src)}; })`);
+  ok(await load('/favicon.ico') > 0, '/favicon.ico failed to load');
+  ok(await load('/favicon.svg') > 0, '/favicon.svg failed to load');
+  ok(await js('document.querySelectorAll("link[rel=icon]").length') === 2, 'icon links');
+});
+
 await test('security: API rejects requests without the session token', async () => {
   ok(await js('fetch("/api/project").then(r => r.status)') === 403, 'GET without token should be 403');
   ok(await js('fetch("/api/save", { method: "POST", body: "x" }).then(r => r.status)') === 403, 'POST without token should be 403');

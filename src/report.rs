@@ -204,6 +204,13 @@ pub fn resources(p: &Project) -> Result<String, String> {
     Ok(o)
 }
 
+/// The app icon as an inline `data:` URI, so exported pages work offline.
+fn favicon_data_uri() -> String {
+    let svg = String::from_utf8_lossy(crate::server::ICON_SVG);
+    let enc = svg.trim().replace('"', "'").replace('%', "%25").replace('#', "%23").replace('<', "%3C").replace('>', "%3E");
+    format!("data:image/svg+xml,{enc}")
+}
+
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
@@ -276,7 +283,7 @@ pub fn html(p: &Project) -> Result<String, String> {
         }
     }
     Ok(format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{name}</title><style>
+        r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{name}</title><link rel="icon" href="{fav}"><style>
 :root{{--bg:#fff;--fg:#1d1d1f;--mut:#86868b;--grid:#e5e5ea;--off:#f4f4f7;--ok:#3b7cff;--crit:#e5484d;--sum:#30343f;--done:rgba(0,0,0,.25);--ms:#f5a524}}
 @media (prefers-color-scheme:dark){{:root{{--bg:#111214;--fg:#f2f2f7;--mut:#8e8e93;--grid:#2c2c2e;--off:#18191c;--ok:#4f8cff;--crit:#ff5d6c;--sum:#d6d9e0;--done:rgba(0,0,0,.35)}}}}
 @media print{{:root{{--bg:#fff;--fg:#000;--off:#f2f2f2}}}}
@@ -286,6 +293,7 @@ body{{background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif;margin
 </style></head><body><h1>{name}</h1><p>{summary}</p><div class="wrap">
 <svg width="{wpx}" height="{hpx}" xmlns="http://www.w3.org/2000/svg"><defs><marker id="a" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L6,3 L0,6z" style="fill:var(--mut)"/></marker></defs>{g}</svg></div></body></html>"#,
         name = esc(&p.name),
+        fav = favicon_data_uri(),
         summary = esc(&format!(
             "Finishes {} · {} · {:.0}% done · {} · red = critical path",
             fmt_date((s.finish - 1).div_euclid(DAY).max(p.start)),

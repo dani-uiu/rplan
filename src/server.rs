@@ -22,6 +22,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fs, thread};
 
 const UI: &str = include_str!("ui.html");
+pub const ICON_ICO: &[u8] = include_bytes!("../assets/rplan.ico");
+pub const ICON_SVG: &[u8] = include_bytes!("../assets/rplan.svg");
+pub const ICON_PNG: &[u8] = include_bytes!("../assets/rplan.png");
+
+fn icon(ctype: &'static str, bytes: &[u8]) -> Resp {
+    let mut r = Resp::new(200, ctype, bytes.to_vec());
+    r.extra.push(("Cache-Control".into(), "public, max-age=86400".into()));
+    r
+}
 const MAX_BODY: usize = 16 << 20;
 
 pub struct Ctx {
@@ -310,10 +319,13 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
             let mut r = Resp::new(200, "text/html; charset=utf-8", UI.replace("__RPLAN_TOKEN__", &ctx.token));
             r.extra.push((
                 "Content-Security-Policy".into(),
-                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'".into(),
+                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'".into(),
             ));
             r
         }
+        ("GET", "/favicon.ico") => icon("image/x-icon", ICON_ICO),
+        ("GET", "/favicon.svg") => icon("image/svg+xml", ICON_SVG),
+        ("GET", "/apple-touch-icon.png" | "/icon.png") => icon("image/png", ICON_PNG),
         ("GET", "/api/project") => reply(load(path).and_then(|p| project_json(&p, path))),
         ("GET", "/api/rev") => Resp::json(200, format!(r#"{{"rev":"{}"}}"#, rev(path))),
         ("POST", "/api/save") => {
@@ -418,10 +430,11 @@ fn write_resp(mut st: &TcpStream, r: Resp) {
         _ => "Error",
     };
     let mut head = format!(
-        "HTTP/1.1 {} {reason}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n",
+        "HTTP/1.1 {} {reason}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n",
         r.code,
         r.ctype,
-        r.body.len()
+        r.body.len(),
+        if r.extra.iter().any(|(k, _)| k.eq_ignore_ascii_case("Cache-Control")) { "" } else { "Cache-Control: no-store\r\n" }
     );
     for (k, v) in &r.extra {
         let _ = write!(head, "{k}: {v}\r\n");
@@ -516,6 +529,19 @@ mod tests {
         assert_eq!(route(&req("GET", "/api/export.xml?token=secret", &[OK], ""), &c).code, 200);
         assert_eq!(route(&req("POST", "/api/level", &[OK, TOK], ""), &c).code, 200);
         assert!(fs::read_to_string(&c.path).unwrap().contains("delay="));
+    }
+
+    #[test]
+    fn serves_the_favicon() {
+        let c = ctx();
+        let r = route(&req("GET", "/favicon.ico", &[OK], ""), &c);
+        assert_eq!((r.code, r.ctype), (200, "image/x-icon"));
+        assert_eq!(&r.body[..4], &[0, 0, 1, 0], "ICO header");
+        assert_eq!(route(&req("GET", "/favicon.svg", &[OK], ""), &c).ctype, "image/svg+xml");
+        assert_eq!(route(&req("GET", "/favicon.ico", &[("Host", "evil.com")], ""), &c).code, 403);
+        let page = String::from_utf8(route(&req("GET", "/", &[OK], ""), &c).body).unwrap();
+        assert!(page.contains(r#"href="/favicon.ico""#));
+        assert!(crate::report::html(&Project::parse(crate::DEMO).unwrap()).unwrap().contains(r#"<link rel="icon" href="data:image/svg+xml,"#));
     }
 
     #[test]
