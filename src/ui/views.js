@@ -64,6 +64,8 @@ function wbsView() {
     return x;
   };
   place(-1, 0);
+  // The project card is a header, not part of the tree: top-level items aren't wired to it.
+  pos.set(-1, { x: 30, y: 20 });
   let nodes = '', edges = '';
   const node = (i) => {
     const { x, y } = pos.get(i);
@@ -76,9 +78,9 @@ function wbsView() {
   };
   for (const [i, p] of pos) {
     nodes += node(i);
-    const pi = i < 0 ? null : par[i];
-    if (i >= 0) {
-      const q = pos.get(pi >= 0 ? pi : -1);
+    const pi = i < 0 ? -1 : par[i];
+    if (pi >= 0) {
+      const q = pos.get(pi);
       const x1 = q.x + NW / 2, y1 = q.y + 78, x2 = p.x + NW / 2, y2 = p.y, my = (y1 + y2) / 2;
       edges += `<path class="wedge" d="M${x1},${y1} V${my} H${x2} V${y2}"/>`;
     }

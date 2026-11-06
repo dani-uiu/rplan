@@ -419,6 +419,7 @@ await test('WBS chart and usage views (tables and workload chart)', async () => 
   await key('3', 'Digit3', 51); await sleep(40);
   const wn = await js('document.querySelectorAll(".wnode").length'), wt = await js('D.tasks.length + 1');
   ok(wn === wt, `one WBS box per task + the project (${wn} boxes, expected ${wt}; view=${await js('view')}; collapsed=${await js('[...collapsed].join()')})`);
+  ok(await js('document.querySelectorAll(".wedge").length') === await js('D.tasks.filter(t => t.level > 0).length'), 'lines only between phases and their subtasks (none from the project card)');
   await shot('12-wbs');
   await key('4', 'Digit4', 52);
   await waitFor(() => js('!!document.querySelector("table.usage")'), 'usage table');
