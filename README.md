@@ -3,8 +3,20 @@
 A fast, plain-text alternative to ProjectLibre, written in Rust. It's a single program with no dependencies. You get a visual editor in your browser, a command line, and project files you can read, diff and keep in git.
 
 ```
-rplan ui "My Project.plan"
+rplan app "My Project.plan"     # desktop window
+rplan ui  "My Project.plan"     # same editor in a browser tab
 ```
+
+## Desktop app
+
+`rplan app` opens the editor in its own window, with its own taskbar icon and no browser tabs or address bar. It uses Edge's (or Chrome's) app mode with a separate profile. Closing the window quits rplan. When started from a shortcut, the console window hides itself.
+
+Inside the app, **Project ▾ → Open or create a project…** (<kbd>Ctrl</kbd>+<kbd>O</kbd>) lists the `.plan` files in the same folder and creates new ones. A new project copies your working week.
+
+On Windows, these per-user extras are set up by hand. None of them need admin rights:
+
+- Start Menu and Desktop shortcuts that run `rplan app "…\Documents\rplan\My Project.plan"`, using `%LOCALAPPDATA%\rplan\rplan.ico` as their icon.
+- Double-clicking `.plan` files, through the registry keys `HKCU\Software\Classes\.plan` and `HKCU\Software\Classes\rplan.project`. Delete both keys to undo it.
 
 ## What it does
 
@@ -94,7 +106,8 @@ Older files (`task 1 | Name | 3 | 2 | Ana | 50`) still load.
 ## Command line
 
 ```
-rplan ui <file> [--port 7878] [--no-open]   visual editor
+rplan app <file>                            desktop window
+rplan ui <file> [--port 7878] [--no-open]   visual editor in a browser tab
 rplan init <file> "<name>" <YYYY-MM-DD>     new project
 rplan demo <file>                           sample project
 rplan import <in.xml> <file>                from ProjectLibre / MS Project XML

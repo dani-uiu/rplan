@@ -276,6 +276,17 @@ dialog::backdrop{background:rgba(5,8,14,.55);backdrop-filter:blur(2px)}
 .mon .g7 button.hol{background:var(--hol);color:var(--ms);font-weight:700}
 .mon .g7 button.xw{background:rgba(50,213,131,.15);color:var(--good);font-weight:700}
 .mon .g7 button.st{outline:2px solid var(--acc)}
+.newrow{display:flex;gap:8px}
+.newrow input{flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+.newrow input:focus{outline:none;border-color:var(--acc)}
+.files{display:flex;flex-direction:column;gap:4px;max-height:50vh;overflow:auto}
+.fileit{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:1px solid transparent;background:transparent;padding:8px 10px;border-radius:9px;cursor:pointer}
+.fileit:hover:not(:disabled){background:var(--panel2);border-color:var(--line)}
+.fileit img{width:22px;height:22px}
+.fileit span{display:flex;flex-direction:column;flex:1;min-width:0}
+.fileit span small{color:var(--dim);font-size:11px}
+.fileit>small{color:var(--mut);font-size:11.5px;white-space:nowrap}
+.fileit.cur{background:var(--sel);cursor:default}
 .keys{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:13px}
 .keys kbd,.status kbd{background:var(--panel2);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;font:inherit;font-size:11px}
 .status{display:flex;gap:16px;align-items:center;padding:5px 14px;border-top:1px solid var(--line);background:var(--panel);color:var(--mut);font-size:11.5px;white-space:nowrap;overflow:hidden}
@@ -931,12 +942,38 @@ function inspector() {
 }
 
 /* ---------- dialogs ---------- */
-function openDialog(kind) { dlgKind = kind; renderDialog(); if (!$('#dlg').open) $('#dlg').showModal(); }
+function openDialog(kind) {
+  dlgKind = kind;
+  if (kind === 'open') { files = null; api('GET', '/api/files').then(j => { files = j; if (dlgKind === 'open') renderDialog(); }); }
+  renderDialog(); if (!$('#dlg').open) $('#dlg').showModal();
+  if (kind === 'open') setTimeout(() => $('#new-file-name')?.focus(), 0);
+}
+let files = null;
+function switchProject(url, body) {
+  return enqueue(async () => {
+    const j = await api('POST', url, body);
+    if (!j.ok) { if (!j.handled) toast(j.error, 1); return; }
+    // A different file: its own undo history, selection and folding.
+    undo = []; redo = []; sel = new Set(); primary = anchor = null;
+    if ($('#dlg').open) $('#dlg').close();
+    dlgKind = null; accept(j); fit(); saved();
+    toast(url.endsWith('create') ? `Created “${j.name}”` : `Opened “${j.name}”`);
+  });
+}
+function ago(ms) { const s = (Date.now() - ms) / 1000; return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : new Date(ms).toLocaleDateString(); }
 function renderDialog() {
   const d = $('#dlg');
+  if (dlgKind === 'open') {
+    const list = !files ? '<div class="mut">Loading…</div>' : files.files.map(f => `<button class="fileit ${f.file === files.current ? 'cur' : ''}" data-act="open-file" data-file="${esc(f.file)}" ${f.file === files.current ? 'disabled' : ''}>
+        <img src="/favicon.svg" alt=""><span><b>${esc(f.name || f.file.replace(/\.plan$/i, ''))}</b><small>${esc(f.file)}</small></span><small>${f.file === files.current ? 'open now' : ago(f.modified)}</small></button>`).join('') || '<div class="mut">No project files yet.</div>';
+    d.innerHTML = `<div class="dh"><h3>Projects</h3><span class="mut">${esc(files?.dir || '')}</span><button class="x" data-act="dlg-close">×</button></div><div class="db">
+      <h4>New project</h4><div class="newrow"><input id="new-file-name" placeholder="Name, e.g. Office move" maxlength="100"><button class="btn primary" data-act="create-file">${ic('plus')}Create</button></div>
+      <h4>Open</h4><div class="files">${list}</div></div>`;
+    return;
+  }
   if (dlgKind === 'help') {
     d.innerHTML = `<div class="dh"><h3>Keyboard & mouse</h3><button class="x" data-act="dlg-close">×</button></div><div class="db"><div class="keys" style="margin-top:12px">
-      ${[['N', 'New task (after the selected one)'], ['Enter', 'Open the details panel'], ['Tab / Shift+Tab', 'Indent / outdent (make or unmake subtasks)'], ['Alt+↑ / Alt+↓', 'Move the task up / down'], ['↑ / ↓', 'Select previous / next task'], ['Shift+click, Ctrl+click', 'Select several tasks'], ['Ctrl+A', 'Select all tasks'], ['Delete', 'Delete selected tasks'], ['Ctrl+C / Ctrl+V', 'Copy rows / paste rows (also from a spreadsheet)'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo'], ['1 2 3', 'Gantt / Network / People'], ['+ / − / F', 'Zoom in / out / fit'], ['C', 'Focus the critical path'], ['Ctrl+P', 'Print or save as PDF'], ['Drag a bar', 'Set "start no earlier than"'], ['Drag a bar’s right edge', 'Change the duration'], ['Drag the ○ to another bar', 'Link them (finish → start)'], ['Drag ⋮⋮ in the # column', 'Reorder rows'], ['Click a date in the timeline', 'Toggle holiday / working day']].map(([k, v]) => `<div><kbd>${k}</kbd></div><div>${v}</div>`).join('')}
+      ${[['N', 'New task (after the selected one)'], ['Enter', 'Open the details panel'], ['Tab / Shift+Tab', 'Indent / outdent (make or unmake subtasks)'], ['Alt+↑ / Alt+↓', 'Move the task up / down'], ['↑ / ↓', 'Select previous / next task'], ['Shift+click, Ctrl+click', 'Select several tasks'], ['Ctrl+A', 'Select all tasks'], ['Delete', 'Delete selected tasks'], ['Ctrl+C / Ctrl+V', 'Copy rows / paste rows (also from a spreadsheet)'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo'], ['Ctrl+O', 'Open or create a project'], ['1 2 3', 'Gantt / Network / People'], ['+ / − / F', 'Zoom in / out / fit'], ['C', 'Focus the critical path'], ['Ctrl+P', 'Print or save as PDF'], ['Drag a bar', 'Set "start no earlier than"'], ['Drag a bar’s right edge', 'Change the duration'], ['Drag the ○ to another bar', 'Link them (finish → start)'], ['Drag ⋮⋮ in the # column', 'Reorder rows'], ['Click a date in the timeline', 'Toggle holiday / working day']].map(([k, v]) => `<div><kbd>${k}</kbd></div><div>${v}</div>`).join('')}
     </div></div>`;
     return;
   }
@@ -979,7 +1016,7 @@ function openMenu(name, btn) {
   const items = {
     level: [['level', 'Level resources', 'delay clashing tasks'], ['unlevel', 'Clear leveling', ''], ['-'], ['go-people', 'Show workloads', '3']],
     baseline: [['baseline', 'Save baseline', 'snapshot dates'], ['baseline-clear', 'Clear baseline', '']],
-    project: [['new-project', 'New blank project', 'keeps your calendar'], ['sample', 'Load the sample project', ''], ['-'], ['import', 'Import ProjectLibre / MS Project…', '.xml']],
+    project: [['open', 'Open or create a project…', 'Ctrl+O'], ['-'], ['new-project', 'Clear this project', 'keeps your calendar'], ['sample', 'Load the sample project', ''], ['-'], ['import', 'Import ProjectLibre / MS Project…', '.xml']],
     export: [['exp-xml', 'ProjectLibre / MS Project (.xml)', ''], ['exp-html', 'Shareable Gantt (.html)', ''], ['exp-plan', 'Plan file (.plan)', ''], ['-'], ['print', 'Print / save as PDF', 'Ctrl+P']],
   }[name];
   const m = document.createElement('div');
@@ -1129,7 +1166,10 @@ async function act(a, el) {
     case 'baseline': action('/api/baseline', D.tasks.some(t => t.base) ? 'Replace the saved baseline with the current dates?' : null); break;
     case 'baseline-clear': action('/api/baseline/clear'); break;
     case 'go-people': setView('resources'); break;
-    case 'new-project': if (!D.tasks.length || confirm(`Start a new, empty project? “${D.name}” will be replaced (Ctrl+Z brings it back).`)) { sel = new Set(); primary = null; await action('/api/new'); fit(); } break;
+    case 'open': openDialog('open'); break;
+    case 'open-file': switchProject('/api/open', el.dataset.file); break;
+    case 'create-file': { const n = $('#new-file-name')?.value.trim(); if (!n) { toast('Type a name for the new project', 1); $('#new-file-name')?.focus(); } else switchProject('/api/create', n); break; }
+    case 'new-project': if (!D.tasks.length || confirm(`Clear “${D.name}” and start over in this file? (Ctrl+Z brings it back.)`)) { sel = new Set(); primary = null; await action('/api/new'); fit(); } break;
     case 'sample': if (!D.tasks.length || confirm(`Replace “${D.name}” with the sample project? (Ctrl+Z brings it back.)`)) { sel = new Set(); primary = null; await action('/api/sample'); fit(); } break;
     case 'import': $('#file').click(); break;
     case 'exp-xml': location.href = '/api/export.xml?token=' + TOKEN; break;
@@ -1283,7 +1323,8 @@ async function importFile(input) {
 document.addEventListener('keydown', e => {
   const el = e.target, inInput = el.matches && el.matches('input,select,textarea');
   if (e.key === 'Escape' && $('#menu')) { closeMenu(); return; }
-  if ($('#dlg').open) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') { e.preventDefault(); act('open'); return; }
+  if ($('#dlg').open) { if (e.key === 'Enter' && el.id === 'new-file-name') act('create-file'); return; }
   if (inInput) {
     if (e.key === 'Enter' && el.dataset.f === 'new') { const name = el.value.trim(); if (name) addTask(name); return; }
     if (e.key === 'Enter' && el.tagName !== 'TEXTAREA' && el.tagName !== 'SELECT') { el.blur(); return; }
@@ -1435,9 +1476,14 @@ document.addEventListener('wheel', e => { if (e.ctrlKey && view !== 'network') {
 let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(render, 150); });
 addEventListener('beforeprint', () => { if (view !== 'gantt') { view = 'gantt'; render(); } });
 
+/* tell rplan the window is still open (it quits a while after the last window closes) */
+setInterval(() => { fetch('/api/ping', { headers: { 'X-Rplan-Token': TOKEN } }).catch(() => {}); }, 15000);
+
 /* live reload when the .plan file changes elsewhere (text editor, CLI, git pull…) */
 setInterval(async () => {
-  if (!D || drag || document.activeElement?.matches('input,select,textarea') || $('#dlg').open) return;
+  // Don't reload under someone's typing: only pause while a field has unsaved changes.
+  const a = document.activeElement, typing = a?.matches('input,textarea') && a.value !== a.defaultValue;
+  if (!D || drag || typing || $('#dlg').open) return;
   try {
     const r = await (await fetch('/api/rev', { headers: { 'X-Rplan-Token': TOKEN } })).json();
     if (r.rev && r.rev !== D.rev) { await chain; const old = D.text; await load(); if (D.text !== old) { undo.push(old); toast('Reloaded — the file changed on disk'); } }

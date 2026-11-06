@@ -316,6 +316,28 @@ await test('Project menu: new blank project (with a welcome screen), then undo',
   ok(await js('D.tasks.length') > 5 && file().includes('Website Launch'), 'undo brings the project back');
 });
 
+await test('Ctrl+O: create a new project file, then switch back', async () => {
+  await js('document.activeElement.blur()');
+  await key('o', 'KeyO', 79, 2);
+  await waitFor(() => js('document.querySelector("#dlg").open && !!document.querySelector(".fileit.cur")'), 'projects dialog');
+  await js(`document.querySelector('#new-file-name').value = 'Office Move 2027'`);
+  await js('document.querySelector("[data-act=create-file]").click()');
+  await waitFor(() => js('D.name === "Office Move 2027"'), 'new project');
+  const created = path.join(tmp, 'Office Move 2027.plan');
+  ok(fs.existsSync(created) && fs.readFileSync(created, 'utf8').startsWith('project Office Move 2027'), 'new file on disk');
+  ok(await js('undo.length') === 0, 'fresh undo history');
+  await js(`(() => { const el = document.querySelector('[data-f="new"]'); el.value = 'Book the van'; el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+  await settle();
+  ok(fs.readFileSync(created, 'utf8').includes('Book the van'), 'edits go to the new file');
+  ok(!file().includes('Book the van'), 'original file untouched');
+  await shot('09-projects');
+  await key('o', 'KeyO', 79, 2);
+  await waitFor(() => js('!!document.querySelector("[data-act=open-file][data-file=\\"test.plan\\"]")'), 'file list');
+  await shot('10-open-dialog');
+  await js('document.querySelector("[data-act=open-file][data-file=\\"test.plan\\"]").click()');
+  await waitFor(() => js('D.path.endsWith("test.plan")'), 'switch back');
+});
+
 await test('external edits to the .plan file reload automatically', async () => {
   fs.writeFileSync(plan, file().replace('project Website Launch', 'project Edited Elsewhere'));
   await waitFor(() => js('D.name === "Edited Elsewhere"'), 'live reload', 6000);

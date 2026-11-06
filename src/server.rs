@@ -17,6 +17,8 @@ use std::fmt::Write as _;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fs, thread};
@@ -34,10 +36,90 @@ fn icon(ctype: &'static str, bytes: &[u8]) -> Resp {
 const MAX_BODY: usize = 16 << 20;
 
 pub struct Ctx {
-    pub path: String,
+    /// The project file being edited (can be switched from the app).
+    pub path: Mutex<String>,
     pub port: u16,
     pub token: String,
     pub lock: Mutex<()>,
+    /// Seconds since the epoch of the last request (used to exit after the window closes).
+    pub last_seen: AtomicU64,
+}
+
+impl Ctx {
+    pub fn new(path: &str, port: u16, token: String) -> Ctx {
+        Ctx { path: Mutex::new(path.to_string()), port, token, lock: Mutex::new(()), last_seen: AtomicU64::new(now_secs()) }
+    }
+    pub fn path(&self) -> String {
+        self.path.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// How `serve` shows the editor.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Launch {
+    /// Just print the address.
+    None,
+    /// Open a tab in the default browser.
+    Browser,
+    /// Open a standalone app window; quit when it closes.
+    Window,
+}
+
+// ---------- project files next to the current one ----------
+
+fn dir_of(path: &str) -> PathBuf {
+    Path::new(path).parent().filter(|p| !p.as_os_str().is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Resolves a bare `.plan` file name inside the current project's folder.
+fn sibling(path: &str, name: &str) -> Result<String, String> {
+    let bad = name.is_empty() || name.contains(['/', '\\', ':', '\0']) || name.starts_with('.') || !name.to_ascii_lowercase().ends_with(".plan");
+    if bad {
+        return Err(format!("“{name}” isn't a project file in this folder"));
+    }
+    let p = dir_of(path).join(name);
+    if !p.is_file() {
+        return Err(format!("“{name}” doesn't exist any more"));
+    }
+    Ok(p.to_string_lossy().to_string())
+}
+
+/// Turns a project name into a safe Windows/macOS/Linux file name.
+pub fn safe_file_name(name: &str) -> String {
+    let mut s: String = name.chars().map(|c| if r#"\/:*?"<>|"#.contains(c) || c.is_control() { '-' } else { c }).collect();
+    s = s.trim().trim_end_matches(['.', ' ']).to_string();
+    let stem = s.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let reserved = ["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str()) || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4);
+    if s.is_empty() || reserved {
+        s = format!("{s} project").trim().to_string();
+    }
+    s.chars().take(120).collect()
+}
+
+fn files_json(path: &str) -> String {
+    let dir = dir_of(path);
+    let current = Path::new(path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+    let mut files: Vec<(u128, String, String)> = fs::read_dir(&dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("plan")) && e.path().is_file())
+                .take(500)
+                .map(|e| {
+                    let file = e.file_name().to_string_lossy().to_string();
+                    let modified = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis());
+                    let name = fs::read_to_string(e.path()).ok().and_then(|t| t.lines().find_map(|l| l.trim().strip_prefix("project ").map(|n| n.trim().to_string()))).unwrap_or_default();
+                    (modified, file, name)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    let list: Vec<String> = files.iter().map(|(m, f, n)| format!(r#"{{"file":{},"name":{},"modified":{m}}}"#, js(f), js(n))).collect();
+    format!(r#"{{"ok":true,"dir":{},"current":{},"files":[{}]}}"#, js(&dir.to_string_lossy()), js(&current), list.join(","))
 }
 
 pub struct Req {
@@ -292,8 +374,19 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
     if let Some(r) = check(req, ctx) {
         return r;
     }
-    let path = ctx.path.as_str();
+    ctx.last_seen.store(now_secs(), Ordering::Relaxed);
     let _guard = ctx.lock.lock().unwrap_or_else(|e| e.into_inner());
+    let current = ctx.path();
+    let path = current.as_str();
+    let switch_to = |np: String, p: &Project| -> Resp {
+        match project_json(p, &np) {
+            Ok(j) => {
+                *ctx.path.lock().unwrap_or_else(|e| e.into_inner()) = np;
+                Resp::json(200, j)
+            }
+            Err(e) => Resp::err(400, &e),
+        }
+    };
     let reply = |r: Result<String, String>| match r {
         Ok(j) => Resp::json(200, j),
         Err(e) => Resp::err(400, &e),
@@ -327,6 +420,35 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
         ("GET", "/favicon.svg") => icon("image/svg+xml", ICON_SVG),
         ("GET", "/apple-touch-icon.png" | "/icon.png") => icon("image/png", ICON_PNG),
         ("GET", "/api/project") => reply(load(path).and_then(|p| project_json(&p, path))),
+        ("GET", "/api/ping") => Resp::json(200, r#"{"ok":true}"#.into()),
+        ("GET", "/api/files") => Resp::json(200, files_json(path)),
+        ("POST", "/api/open") => match sibling(path, req.body.trim()).and_then(|np| load(&np).map(|p| (np, p))) {
+            Ok((np, p)) => switch_to(np, &p),
+            Err(e) => Resp::err(400, &e),
+        },
+        ("POST", "/api/create") => {
+            let name = clean(req.body.trim());
+            if name.is_empty() {
+                return Resp::err(400, "give the new project a name");
+            }
+            let np = dir_of(path).join(format!("{}.plan", safe_file_name(&name)));
+            if np.exists() {
+                return Resp::err(400, &format!("{} already exists — open it instead", np.file_name().unwrap_or_default().to_string_lossy()));
+            }
+            let np = np.to_string_lossy().to_string();
+            let mut b = crate::blank_project(&np);
+            b.name = name;
+            if let Ok(cur) = load(path) {
+                // Same working week as the project you came from.
+                b.week = cur.week;
+                b.day_minutes = cur.day_minutes;
+                b.currency = cur.currency;
+            }
+            match save(&np, &b) {
+                Ok(()) => switch_to(np, &b),
+                Err(e) => Resp::err(400, &e),
+            }
+        }
         ("GET", "/api/rev") => Resp::json(200, format!(r#"{{"rev":"{}"}}"#, rev(path))),
         ("POST", "/api/save") => {
             if let Some(r) = stale() {
@@ -454,15 +576,97 @@ fn open_browser(url: &str) {
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
-pub fn serve(path: &str, port: u16, open: bool) -> Result<(), String> {
+/// Chromium-based browsers that support `--app` windows, most preferred first.
+pub fn find_app_browser() -> Option<PathBuf> {
+    let mut c: Vec<PathBuf> = vec![];
+    if cfg!(windows) {
+        for base in [std::env::var("ProgramFiles(x86)").ok(), std::env::var("ProgramFiles").ok(), std::env::var("LOCALAPPDATA").ok()].into_iter().flatten() {
+            c.push(Path::new(&base).join(r"Microsoft\Edge\Application\msedge.exe"));
+            c.push(Path::new(&base).join(r"Google\Chrome\Application\chrome.exe"));
+        }
+    } else if cfg!(target_os = "macos") {
+        c.push("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".into());
+        c.push("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge".into());
+        c.push("/Applications/Chromium.app/Contents/MacOS/Chromium".into());
+    } else {
+        for n in ["google-chrome", "chromium", "chromium-browser", "microsoft-edge"] {
+            c.push(Path::new("/usr/bin").join(n));
+        }
+    }
+    c.into_iter().find(|p| p.is_file())
+}
+
+fn app_profile_dir() -> PathBuf {
+    let base = std::env::var("LOCALAPPDATA").or_else(|_| std::env::var("HOME").map(|h| format!("{h}/.local/share"))).unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string());
+    Path::new(&base).join("rplan").join("window")
+}
+
+/// Opens the editor in its own window. Returns true if we can tell when it closes.
+fn open_window(url: &str, ctx: Arc<Ctx>) -> bool {
+    let Some(browser) = find_app_browser() else {
+        open_browser(url);
+        return false;
+    };
+    let child = std::process::Command::new(browser)
+        .arg(format!("--app={url}"))
+        .arg(format!("--user-data-dir={}", app_profile_dir().display()))
+        .args(["--no-first-run", "--no-default-browser-check", "--window-size=1440,900"])
+        .spawn();
+    let Ok(mut child) = child else {
+        open_browser(url);
+        return false;
+    };
+    thread::spawn(move || {
+        let t0 = std::time::Instant::now();
+        let _ = child.wait();
+        if t0.elapsed() > Duration::from_secs(5) {
+            std::process::exit(0); // the window was closed
+        }
+        // The browser handed the window to an already-running instance, so we
+        // can't wait on it: quit once the page stops checking in.
+        loop {
+            thread::sleep(Duration::from_secs(10));
+            if now_secs().saturating_sub(ctx.last_seen.load(Ordering::Relaxed)) > 150 {
+                std::process::exit(0);
+            }
+        }
+    });
+    true
+}
+
+/// When started from a shortcut or a double-click, Windows gives us a console
+/// window of our own; hide it once the app window is up. Leaves terminals alone.
+#[cfg(windows)]
+fn hide_own_console() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleProcessList(list: *mut u32, count: u32) -> u32;
+        fn FreeConsole() -> i32;
+    }
+    let mut ids = [0u32; 4];
+    unsafe {
+        if GetConsoleProcessList(ids.as_mut_ptr(), ids.len() as u32) == 1 {
+            FreeConsole();
+        }
+    }
+}
+
+pub fn serve(path: &str, port: u16, launch: Launch) -> Result<(), String> {
     load(path)?;
     let listener = (port..port.saturating_add(20)).find_map(|p| TcpListener::bind(("127.0.0.1", p)).ok()).ok_or("could not open a local port")?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let ctx = Arc::new(Ctx { path: path.to_string(), port, token: new_token(), lock: Mutex::new(()) });
+    let ctx = Arc::new(Ctx::new(path, port, new_token()));
     let url = format!("http://127.0.0.1:{port}/");
-    println!("{GRN}✓ rplan is running at {BLD}{url}{RST}  {DIM}(editing {path} — close this window or press Ctrl+C to stop){RST}");
-    if open {
-        open_browser(&url);
+    let _ = writeln!(std::io::stdout(), "{GRN}✓ rplan is running at {BLD}{url}{RST}  {DIM}(editing {path} — press Ctrl+C to stop){RST}");
+    match launch {
+        Launch::None => {}
+        Launch::Browser => open_browser(&url),
+        Launch::Window => {
+            if open_window(&url, Arc::clone(&ctx)) {
+                #[cfg(windows)]
+                hide_own_console();
+            }
+        }
     }
     for st in listener.incoming().flatten() {
         let ctx = Arc::clone(&ctx);
@@ -488,7 +692,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.plan").to_string_lossy().to_string();
         fs::write(&path, crate::DEMO).unwrap();
-        Ctx { path, port: 7999, token: "secret".into(), lock: Mutex::new(()) }
+        Ctx::new(&path, 7999, "secret".into())
     }
     fn req(method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> Req {
         let (path, query) = path.split_once('?').unwrap_or((path, ""));
@@ -513,7 +717,7 @@ mod tests {
         assert_eq!(route(&req("POST", "/api/level", &[OK, TOK, ("Origin", "https://evil.com")], ""), &c).code, 403, "foreign origin");
         assert_eq!(route(&req("GET", "/api/project", &[OK], ""), &c).code, 403, "reading needs the token too");
         // The file was never touched.
-        assert_eq!(fs::read_to_string(&c.path).unwrap(), crate::DEMO);
+        assert_eq!(fs::read_to_string(&c.path()).unwrap(), crate::DEMO);
     }
 
     #[test]
@@ -528,7 +732,35 @@ mod tests {
         assert!(body.starts_with(r#"{"ok":true"#) && body.contains("Backend API"));
         assert_eq!(route(&req("GET", "/api/export.xml?token=secret", &[OK], ""), &c).code, 200);
         assert_eq!(route(&req("POST", "/api/level", &[OK, TOK], ""), &c).code, 200);
-        assert!(fs::read_to_string(&c.path).unwrap().contains("delay="));
+        assert!(fs::read_to_string(&c.path()).unwrap().contains("delay="));
+    }
+
+    #[test]
+    fn open_and_create_project_files_in_the_same_folder() {
+        let c = ctx();
+        let dir = dir_of(&c.path());
+        let body = |r: Resp| String::from_utf8(r.body).unwrap();
+        // create a new project next to the current one; it becomes the current file
+        let r = route(&req("POST", "/api/create", &[OK, TOK], "Office: Move?"), &c);
+        let code = r.code;
+        assert_eq!(code, 200, "{}", body(r));
+        assert!(c.path().ends_with("Office- Move-.plan"), "{}", c.path());
+        assert!(fs::read_to_string(c.path()).unwrap().starts_with("project Office: Move?\n"));
+        assert_eq!(route(&req("POST", "/api/create", &[OK, TOK], "Office: Move?"), &c).code, 400, "no overwrite");
+        // list and switch back
+        let files = body(route(&req("GET", "/api/files", &[OK, TOK], ""), &c));
+        assert!(files.contains(r#""file":"t.plan""#) && files.contains(r#""name":"Website Launch""#), "{files}");
+        assert_eq!(route(&req("POST", "/api/open", &[OK, TOK], "t.plan"), &c).code, 200);
+        assert!(c.path().ends_with("t.plan"));
+        // nothing outside the folder, nothing that isn't a .plan
+        fs::write(dir.join("notes.txt"), "x").unwrap();
+        for bad in ["../t.plan", "..\\t.plan", "C:\\Windows\\win.ini", "/etc/passwd", "notes.txt", "missing.plan", ".plan", ""] {
+            assert_eq!(route(&req("POST", "/api/open", &[OK, TOK], bad), &c).code, 400, "{bad}");
+        }
+        assert!(c.path().ends_with("t.plan"));
+        assert_eq!(route(&req("POST", "/api/open", &[OK], "t.plan"), &c).code, 403, "needs the token");
+        assert_eq!(safe_file_name("CON"), "CON project");
+        assert_eq!(safe_file_name("  a/b\\c.  "), "a-b-c");
     }
 
     #[test]
@@ -547,15 +779,15 @@ mod tests {
     #[test]
     fn new_blank_project_and_sample() {
         let c = ctx();
-        fs::write(&c.path, "project X\nstart 2026-11-09\nweek Sat 09:00-13:00\ndayhours 7\ntask 1 | A | 1d").unwrap();
+        fs::write(c.path(), "project X\nstart 2026-11-09\nweek Sat 09:00-13:00\ndayhours 7\ntask 1 | A | 1d").unwrap();
         assert_eq!(route(&req("POST", "/api/new", &[OK, TOK], ""), &c).code, 200);
-        let p = Project::parse(&fs::read_to_string(&c.path).unwrap()).unwrap();
+        let p = Project::parse(&fs::read_to_string(&c.path()).unwrap()).unwrap();
         assert!(p.tasks.is_empty());
         assert_eq!(p.name, "t", "named after the file");
         assert_eq!(p.start, crate::today());
         assert_eq!((p.week[6].clone(), p.day_minutes), (vec![(540, 780)], 420), "keeps the calendar");
         assert_eq!(route(&req("POST", "/api/sample", &[OK, TOK], ""), &c).code, 200);
-        assert!(fs::read_to_string(&c.path).unwrap().contains("Website Launch"));
+        assert!(fs::read_to_string(&c.path()).unwrap().contains("Website Launch"));
         assert_eq!(crate::blank_project("C:/x/My Project.plan").name, "My Project");
     }
 
@@ -566,8 +798,8 @@ mod tests {
         assert_eq!(r.code, 400);
         assert!(String::from_utf8(r.body).unwrap().contains("loop"));
         assert_eq!(route(&req("POST", "/api/save", &[OK, TOK, ("X-Rplan-Rev", "1")], crate::DEMO), &c).code, 409);
-        let cur = rev(&c.path);
+        let cur = rev(&c.path());
         assert_eq!(route(&req("POST", "/api/save", &[OK, TOK, ("X-Rplan-Rev", &cur)], crate::DEMO), &c).code, 200);
-        assert_eq!(fs::read_to_string(&c.path).unwrap(), Project::parse(crate::DEMO).unwrap().serialize());
+        assert_eq!(fs::read_to_string(&c.path()).unwrap(), Project::parse(crate::DEMO).unwrap().serialize());
     }
 }

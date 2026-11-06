@@ -46,7 +46,8 @@ task 9 | Launch | 0 | 8 | PM | 0
 const HELP: &str = "rplan — plain-text project scheduling (critical path, Gantt, resources)
 
 OPEN THE APP
-  rplan ui <file> [--port 7878] [--no-open]   visual editor in your browser
+  rplan app <file>                            desktop window (closes rplan when you close it)
+  rplan ui <file> [--port 7878] [--no-open]   same editor in a browser tab
 
 PROJECT
   rplan init <file> \"<name>\" <YYYY-MM-DD>     new empty project
@@ -172,14 +173,21 @@ fn run() -> Result<(), String> {
     let need = |n: usize| if a.len() < n { Err(format!("not enough arguments\n\n{HELP}")) } else { Ok(()) };
     let cmd = a.first().map(String::as_str).unwrap_or("");
     match cmd {
-        "ui" => {
+        "ui" | "app" => {
             need(2)?;
             if fs::metadata(&a[1]).is_err() {
                 save(&a[1], &blank_project(&a[1]))?;
                 ok(&format!("Created a new, empty project in {}", a[1]));
             }
             let port = flag(&a, "--port").and_then(|v| v.parse().ok()).unwrap_or(7878);
-            server::serve(&a[1], port, !a.iter().any(|x| x == "--no-open"))?;
+            let launch = if a.iter().any(|x| x == "--no-open") {
+                server::Launch::None
+            } else if cmd == "app" {
+                server::Launch::Window
+            } else {
+                server::Launch::Browser
+            };
+            server::serve(&a[1], port, launch)?;
         }
         "init" => {
             need(4)?;
@@ -407,7 +415,8 @@ fn main() {
     #[cfg(windows)]
     enable_ansi();
     if let Err(e) = run() {
-        eprintln!("{}error:{} {e}", report::RED, RST);
+        // The console may be gone (desktop window mode), so never panic while reporting.
+        let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("{}error:{} {e}\n", report::RED, RST));
         process::exit(1);
     }
 }
