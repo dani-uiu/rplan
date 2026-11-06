@@ -46,11 +46,18 @@ srv.stdout.on('data', d => srvOut += d);
 const url = await waitFor(() => (srvOut.match(/http:\/\/127\.0\.0\.1:\d+\//) || [])[0], 'rplan to start');
 
 // ---------- start the browser ----------
-const dport = 9400 + Math.floor(Math.random() * 400);
-const sandbox = process.platform === 'linux' && process.env.CI ? ['--no-sandbox'] : [];
-const br = spawn(browser, ['--headless=new', '--disable-gpu', ...sandbox, `--remote-debugging-port=${dport}`, `--user-data-dir=${path.join(tmp, 'profile')}`, '--window-size=1500,950', '--no-first-run', '--no-default-browser-check', 'about:blank']);
-procs.push(br);
-const target = await waitFor(async () => (await (await fetch(`http://127.0.0.1:${dport}/json/list`)).json()).find(t => t.type === 'page'), 'the browser', 15000);
+// Headless Chrome can be slow to start on CI machines: wait longer, and retry once on a new port.
+const sandbox = process.platform === 'linux' && process.env.CI ? ['--no-sandbox', '--disable-dev-shm-usage'] : [];
+let target = null, brLog = '';
+for (let attempt = 1; attempt <= 2 && !target; attempt++) {
+  const dport = 9400 + Math.floor(Math.random() * 400);
+  const br = spawn(browser, ['--headless=new', '--disable-gpu', ...sandbox, `--remote-debugging-port=${dport}`, `--user-data-dir=${path.join(tmp, 'profile' + attempt)}`, '--window-size=1500,950', '--no-first-run', '--no-default-browser-check', 'about:blank']);
+  br.stderr.on('data', d => brLog += d);
+  procs.push(br);
+  target = await waitFor(async () => (await (await fetch(`http://127.0.0.1:${dport}/json/list`)).json()).find(t => t.type === 'page'), 'the browser', 45000).catch(() => null);
+  if (!target) { try { br.kill(); } catch (e) {} console.log(`browser didn't start (attempt ${attempt}):\n${brLog.slice(-1500)}`); }
+}
+if (!target) process.exit(3);
 const ws = new WebSocket(target.webSocketDebuggerUrl);
 await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
 let seq = 0;
