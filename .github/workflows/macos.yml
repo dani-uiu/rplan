@@ -1,0 +1,79 @@
+name: macOS app
+
+# Builds rplan.app and a .dmg on a Mac. Run it from the Actions tab
+# ("Run workflow"); pushing a v* tag also attaches the .dmg to a release.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Unit tests
+        run: cargo test --release
+      - name: Build rplan.app and the .dmg (Apple Silicon + Intel)
+        run: sh scripts/macos-app.sh
+      - name: Command line works from inside the app
+        run: |
+          B=target/macos/rplan.app/Contents/MacOS/rplan
+          "$B" demo "$RUNNER_TEMP/demo.plan"
+          "$B" show "$RUNNER_TEMP/demo.plan"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: UI tests (headless Chrome)
+        run: node tests/ui_test.mjs target/macos/rplan.app/Contents/MacOS/rplan
+      - name: Open the app like the Finder does
+        run: |
+          APP="$PWD/target/macos/rplan.app"
+          LAST="$HOME/Library/Application Support/rplan/last-project"
+          mkdir -p shots
+          # 1. Double-click the app: it starts a new project in ~/Documents/rplan.
+          open -a "$APP"
+          for i in $(seq 1 30); do [ -f "$HOME/Documents/rplan/My project.plan" ] && break; sleep 1; done
+          test -f "$HOME/Documents/rplan/My project.plan"
+          sleep 6
+          pgrep -x rplan
+          screencapture -x shots/1-new-project.png || true
+          # 2. Open a .plan file with the running app: the window switches to it.
+          open -a "$APP" "$RUNNER_TEMP/demo.plan"
+          for i in $(seq 1 20); do grep -q demo.plan "$LAST" 2>/dev/null && break; sleep 1; done
+          cat "$LAST"; echo
+          grep -q demo.plan "$LAST"
+          sleep 5
+          screencapture -x shots/2-opened-file.png || true
+          pgrep -x rplan
+          # 3. Start again from the Dock: the last project comes back.
+          pkill -x rplan; sleep 2
+          open -a "$APP"
+          sleep 8
+          pgrep -x rplan
+          screencapture -x shots/3-reopened.png || true
+          pkill -x rplan || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rplan-macos
+          path: target/macos/*.dmg
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-screenshots
+          path: |
+            shots/
+            ui-shots/
+          if-no-files-found: ignore
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" target/macos/*.dmg --clobber || gh release create "$GITHUB_REF_NAME" target/macos/*.dmg --generate-notes

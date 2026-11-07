@@ -29,7 +29,7 @@ rplan app "My Project.plan"     # open (or create) a project in the app window
 
 - **Rust** (stable, 1.82 or newer), from [rustup.rs](https://rustup.rs).
 - **Windows 10 or 11:** nothing else. The app window uses the WebView2 runtime, which comes with Windows. If WebView2 is missing, rplan opens in an Edge or Chrome app window instead.
-- **macOS:** the app window uses the system's WebKit. It builds, but it hasn't been tested on a Mac yet.
+- **macOS 11 or newer** (Apple Silicon or Intel): nothing else. The app window uses the system's WebKit. You can use the ready-made app (below) or build it yourself.
 - **Linux:** the editor opens in Chrome, Chromium or Edge as an app window, or in your default browser.
 
 ### Build and install
@@ -43,6 +43,28 @@ cargo install --path .
 This builds an optimized `rplan` and puts it in `~/.cargo/bin`, which rustup adds to your `PATH`. Check it with `rplan --help`.
 
 To update later, run `git pull` and then `cargo install --path .` again.
+
+### macOS: the app
+
+**Ready-made:** in the repository's **Actions** tab, open the **macOS app** workflow, click **Run workflow**, and download `rplan-macos` from the finished run. Tagged versions (`v…`) also attach the `.dmg` to a release.
+
+**Or build it on your Mac** (needs Rust):
+
+```
+git clone https://github.com/dani-uiu/rplan.git
+cd rplan
+sh scripts/macos-app.sh
+```
+
+This makes `target/macos/rplan.app`, which runs on both Apple Silicon and Intel, and a `.dmg` that holds it.
+
+Open the `.dmg` and drag **rplan** to **Applications**. Then:
+- **First launch:** the app is signed only by its builder (it isn't notarized by Apple), so macOS stops a downloaded copy the first time. Right-click rplan → **Open**, or go to **System Settings → Privacy & Security → Open Anyway**. A copy you built yourself opens directly.
+- **Opening it:** from the Dock or Launchpad it reopens your last project. The very first time, it starts a new one in `~/Documents/rplan`.
+- **`.plan` files:** double-click one in the Finder, or drop it on the Dock icon. rplan is their default app.
+- **The menu bar** has Edit (undo, cut, copy, paste) and Window. **⌘** works wherever this guide says **Ctrl**.
+- **The command line** is inside the app. To use it from a terminal:
+  `sudo ln -sf /Applications/rplan.app/Contents/MacOS/rplan /usr/local/bin/rplan`
 
 ### Optional (Windows): open `.plan` files with a double-click
 
@@ -269,7 +291,7 @@ cargo test --release                                # scheduler, calendars, file
 node tests/ui_test.mjs target/release/rplan.exe     # drives the real interface in headless Edge/Chrome (Node 22+)
 ```
 
-GitHub Actions runs both test suites on Windows and Linux for every push.
+GitHub Actions runs both test suites on Windows and Linux for every push. The **macOS app** workflow, started by hand or by a `v…` tag, runs them on a Mac too. It builds the `.app` and `.dmg`, then opens the app the way the Finder does and saves screenshots.
 
 | Path | What it holds |
 |---|---|
@@ -286,3 +308,4 @@ GitHub Actions runs both test suites on Windows and Linux for every push.
 | `src/ui/` | the interface, built into the program; `print.js` is the print studio |
 | `vendor/webview2-com-sys` | WebView2 bindings, changed to load Microsoft's `WebView2Loader.dll` (in `assets/`) only when the window opens |
 | `tests/` | browser tests and fixtures |
+| `scripts/macos-app.sh`, `assets/macos/` | the Mac app bundle: `Info.plist`, icon, `.dmg` |

@@ -544,6 +544,7 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
     let switch_to = |np: String, p: &Project| -> Resp {
         match project_json(p, &np) {
             Ok(j) => {
+                remember_last(&np);
                 *ctx.path.lock().unwrap_or_else(|e| e.into_inner()) = np;
                 Resp::json(200, j)
             }
@@ -825,6 +826,31 @@ pub fn find_app_browser() -> Option<PathBuf> {
     c.into_iter().find(|p| p.is_file())
 }
 
+/// Where the Mac app keeps the name of the project it had open last.
+#[cfg(target_os = "macos")]
+fn last_file() -> Option<PathBuf> {
+    std::env::var("HOME").ok().map(|h| Path::new(&h).join("Library/Application Support/rplan/last-project"))
+}
+
+/// Remembers `path` as the project to reopen when the Mac app is started from the Finder.
+pub fn remember_last(path: &str) {
+    #[cfg(target_os = "macos")]
+    if let (Some(f), Ok(abs)) = (last_file(), std::fs::canonicalize(path)) {
+        let _ = std::fs::create_dir_all(f.parent().unwrap_or(Path::new(".")));
+        let _ = std::fs::write(f, abs.to_string_lossy().as_bytes());
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = path;
+}
+
+/// The project the Mac app had open last, if it still exists.
+#[cfg(target_os = "macos")]
+pub fn last_project() -> Option<String> {
+    let p = std::fs::read_to_string(last_file()?).ok()?;
+    let p = p.trim();
+    Path::new(p).is_file().then(|| p.to_string())
+}
+
 fn app_profile_dir() -> PathBuf {
     let base = std::env::var("LOCALAPPDATA").or_else(|_| std::env::var("HOME").map(|h| format!("{h}/.local/share"))).unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string());
     Path::new(&base).join("rplan").join("window")
@@ -898,7 +924,17 @@ pub fn serve(path: &str, port: u16, launch: Launch) -> Result<(), String> {
                 let title = format!("{} — rplan", Path::new(path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
                 #[cfg(windows)]
                 hide_own_console();
-                let err = crate::window::run(&url, &title, || std::process::exit(0)).err().unwrap_or_default();
+                remember_last(path);
+                let opened = Arc::clone(&ctx);
+                let on_open = move |f: String| {
+                    if load(&f).is_err() {
+                        return false;
+                    }
+                    remember_last(&f);
+                    *opened.path.lock().unwrap_or_else(|e| e.into_inner()) = f;
+                    true
+                };
+                let err = crate::window::run(&url, &title, || std::process::exit(0), on_open).err().unwrap_or_default();
                 // No usable web view (e.g. WebView2 missing): use a browser window instead.
                 let _ = writeln!(std::io::stderr(), "rplan: the app window could not start ({err}); using a browser window");
                 open_window(&url, Arc::clone(&ctx));

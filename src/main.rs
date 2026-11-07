@@ -179,8 +179,26 @@ fn ok(msg: &str) {
     out(&format!("{GRN}✓ {msg}{RST}\n"));
 }
 
+/// Started from the Finder or the Dock (inside rplan.app, no file given): open the
+/// last project, or a new one in ~/Documents/rplan. Older macOS adds a `-psn_…` argument.
+#[cfg(target_os = "macos")]
+fn mac_app_args(a: Vec<String>) -> Vec<String> {
+    let in_bundle = env::current_exe().map(|e| e.to_string_lossy().contains(".app/Contents/MacOS/")).unwrap_or(false);
+    if !in_bundle || !a.iter().all(|x| x.starts_with("-psn_")) {
+        return a;
+    }
+    let file = server::last_project().unwrap_or_else(|| {
+        let dir = std::path::Path::new(&env::var("HOME").unwrap_or_else(|_| ".".into())).join("Documents").join("rplan");
+        let _ = fs::create_dir_all(&dir);
+        dir.join("My project.plan").to_string_lossy().to_string()
+    });
+    vec!["app".into(), file]
+}
+
 fn run() -> Result<(), String> {
     let a: Vec<String> = env::args().skip(1).collect();
+    #[cfg(target_os = "macos")]
+    let a = mac_app_args(a);
     let need = |n: usize| if a.len() < n { Err(format!("not enough arguments\n\n{HELP}")) } else { Ok(()) };
     let cmd = a.first().map(String::as_str).unwrap_or("");
     match cmd {

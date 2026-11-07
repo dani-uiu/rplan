@@ -11,6 +11,10 @@ description = "Fast, plain-text project scheduler: critical path, Gantt, resourc
 wry = { version = "0.57", default-features = false, features = ["os-webview"] }
 tao = { version = "0.37", default-features = false, features = ["rwh_06"] }
 
+# The macOS menu bar (Edit menu for copy/paste, Quit, Window).
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.17", default-features = false }
+
 [profile.release]
 opt-level = 3
 lto = true

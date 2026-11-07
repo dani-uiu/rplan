@@ -64,9 +64,30 @@ fn icon(_: &Path) -> Option<tao::window::Icon> {
     None
 }
 
+/// The macOS menu bar. Without an Edit menu, ⌘C / ⌘V / ⌘X / ⌘A don't work in the web view.
+#[cfg(target_os = "macos")]
+fn mac_menu() -> Option<muda::Menu> {
+    use muda::{AboutMetadata, Menu, PredefinedMenuItem as P, Submenu};
+    let about = AboutMetadata { name: Some("rplan".into()), version: Some(env!("CARGO_PKG_VERSION").into()), ..Default::default() };
+    let app = Submenu::with_items(
+        "rplan",
+        true,
+        &[&P::about(None, Some(about)), &P::separator(), &P::services(None), &P::separator(), &P::hide(None), &P::hide_others(None), &P::show_all(None), &P::separator(), &P::quit(None)],
+    )
+    .ok()?;
+    let edit = Submenu::with_items("Edit", true, &[&P::undo(None), &P::redo(None), &P::separator(), &P::cut(None), &P::copy(None), &P::paste(None), &P::select_all(None)]).ok()?;
+    let win = Submenu::with_items("Window", true, &[&P::minimize(None), &P::maximize(None), &P::fullscreen(None), &P::separator(), &P::close_window(None)]).ok()?;
+    let menu = Menu::with_items(&[&app, &edit, &win]).ok()?;
+    menu.init_for_nsapp();
+    win.set_as_windows_menu_for_nsapp();
+    Some(menu)
+}
+
 /// Opens `url` in a native window and runs until the window is closed.
 /// Returns an error (without having shown anything) if the web view can't start.
-pub fn run(url: &str, title: &str, on_close: impl Fn() + 'static) -> Result<(), String> {
+/// `on_open` gets project files opened from the Finder while the app runs (macOS);
+/// it returns true if it switched to the file, and the page is then reloaded.
+pub fn run(url: &str, title: &str, on_close: impl Fn() + 'static, on_open: impl Fn(String) -> bool + 'static) -> Result<(), String> {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let dir = data_dir();
@@ -114,11 +135,26 @@ pub fn run(url: &str, title: &str, on_close: impl Fn() + 'static) -> Result<(), 
     let webview = builder.build(&window).map_err(|e| e.to_string())?;
     window.set_visible(true);
     let mut on_close = Some(on_close);
+    let home = url.to_string();
+    #[cfg(target_os = "macos")]
+    let mut _menu = None;
     event_loop.run(move |event, _, flow| {
         *flow = ControlFlow::Wait;
-        let _keep = &webview;
         match event {
+            #[cfg(target_os = "macos")]
+            Event::NewEvents(tao::event::StartCause::Init) => _menu = mac_menu(),
             Event::UserEvent(UserEvent::Title(t)) => window.set_title(&t),
+            Event::Opened { urls } => {
+                let files = urls.iter().filter_map(|u| u.to_file_path().ok()).map(|f| f.to_string_lossy().to_string());
+                // One window, one project: the last file opened wins.
+                if let Some(f) = files.filter(|f| f.to_ascii_lowercase().ends_with(".plan")).last() {
+                    if on_open(f) {
+                        let _ = webview.load_url(&home);
+                    }
+                    window.set_visible(true);
+                    window.set_focus();
+                }
+            }
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 if let Some(f) = on_close.take() {
                     f();
