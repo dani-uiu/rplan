@@ -507,8 +507,9 @@ await test('printable reports render and print with page setup', async () => {
   await js(`(() => { const s = document.querySelector('[data-rep="kind"]'); s.value = 'ev'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   ok(await js('document.querySelectorAll(".paper svg polyline").length') >= 1, 'earned value chart');
   await shot('14-report-ev');
-  await js('document.querySelector("[data-act=rep-print]").click()'); await sleep(80);
-  ok(await js('window.__printed') === 1 && await js('document.body.classList.contains("printing-report")'), 'print with the report only');
+  await js('document.querySelector("[data-act=rep-print]").click()');
+  await waitFor(() => js('window.__printed === 1'), 'print dialog opened', 5000);
+  ok(await js('document.body.classList.contains("printing-report")'), 'print with the report only');
   ok((await js('document.querySelector("#page-setup").textContent')).includes('counter(page)'), 'page numbers');
   await js('document.body.classList.remove("printing-report"); act("rep-close")');
 });
