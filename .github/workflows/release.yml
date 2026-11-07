@@ -1,0 +1,54 @@
+name: Release
+
+# Pushing a v* tag builds rplan for Windows and Linux and attaches it to the
+# GitHub release for that tag. The Mac .dmg comes from macos.yml.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: rplan-windows-x64.zip
+          - os: ubuntu-latest
+            asset: rplan-linux-x64.tar.gz
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test
+        run: cargo test --release
+      - name: Build
+        run: cargo build --release
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/rplan.exe, README.md, assets/rplan.ico dist/
+          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.asset }}
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist/rplan && cp target/release/rplan README.md dist/rplan/
+          tar -czf ${{ matrix.asset }} -C dist rplan
+      - name: Attach to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in 1 2 3; do
+            gh release upload "$GITHUB_REF_NAME" ${{ matrix.asset }} --clobber && exit 0
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes && continue
+            sleep 10
+          done
+          exit 1
