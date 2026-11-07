@@ -137,7 +137,7 @@ await test('add a task by typing a name and pressing Enter (linked after the sel
 });
 
 await test('edit duration, predecessors and people in the grid', async () => {
-  const set = (id, f, v) => js(`(() => { const el = document.querySelector('[data-id="${id}"][data-f="${f}"]'); el.value = ${JSON.stringify(v)}; el.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  const set = (id, f, v) => js(`(() => { const el = document.querySelector('[data-id="${id}"][data-f="${f}"]'); el.value = ${JSON.stringify(v)}; el.dispatchEvent(new Event('change', { bubbles: true })); return new Promise(r => setTimeout(r, 150)); })()`);
   await set(12, 'dur', '4h'); await settle();
   ok(taskLine(12).includes('| 4h |'), 'duration: ' + taskLine(12));
   await set(12, 'deps', '8, 6SS+1d'); await settle();
@@ -585,6 +585,48 @@ await test('app zoom scales the interface; dragging still lands on the right day
   ok(after - before >= 1 && after - before <= 3, `resize at 150% added ~2 days (${before}d → ${after}d)`);
   await key('0', 'Digit0', 48, 2); // Ctrl+0
   ok(await js('uiZ') === 1 && await js('document.documentElement.style.zoom') === '', 'Ctrl+0 resets to 100%');
+});
+
+await test('print studio: page preview, fit to pages, other views, header/footer, printing', async () => {
+  await js('setView("gantt"); localStorage.removeItem("rplan.print")');
+  const theme = await js('document.documentElement.dataset.theme');
+  await key('p', 'KeyP', 80, 2); // Ctrl+P
+  await waitFor(() => js('!!document.querySelector("#print .sheet .ps-svg")'), 'the print preview');
+  ok(await js('document.documentElement.dataset.theme') === 'light', 'paper is shown in the light look');
+  const set = (k, v) => js(`(() => { const el = document.querySelector('#print [data-ps="${k}"]'); el.value = ${JSON.stringify(v)}; el.dispatchEvent(new Event('change', { bubbles: true })); return new Promise(r => setTimeout(r, 150)); })()`);
+  const pages = () => js('new Promise(r => setTimeout(() => r(document.querySelectorAll("#print .sheet").length), 150))');
+  await set('paper', 'A4'); await set('orient', 'landscape');
+  const sw = await js(`document.querySelector("#print .sheet").style.width + " " + PS.paper + " " + PS.orient`);
+  ok(sw.startsWith("297mm"), "A4 landscape sheet is 297mm wide: " + sw);
+  ok((await js('document.querySelector("#print .sh-h").textContent')).includes(await js('D.name')), 'header shows the project name');
+  ok(/1\s*\/\s*1|1 of 1|1 de 1/.test(await js('document.querySelector("#print .sh-f").textContent')), 'footer shows page 1 of 1: ' + await js('document.querySelector("#print .sh-f").textContent'));
+  await set('wide', '3');
+  const n3 = await pages();
+  ok(n3 >= 3 && n3 % 3 === 0, 'fit the width to 3 pages gives 3 pages across: ' + n3);
+  ok(await js('document.querySelectorAll("#print .sheet")[1].querySelector("text") !== null'), 'later pages repeat the table and chart');
+  await set('fit', 'page'); await set('wide', '1'); await set('tall', '1');
+  ok(await pages() === 1, 'fit on 1 × 1 page');
+  await shot('print-gantt');
+  for (const w of ['table', 'wbs', 'network', 'resources']) {
+    await set('what', w);
+    ok(await pages() >= 1, w + ' has pages');
+    if (w === 'wbs' || w === 'network') ok(await js('!!document.querySelector("#print .ps-tile .net")'), w + ' is tiled onto pages');
+    if (w === 'wbs') await shot('print-wbs');
+  }
+  await set('what', 'report'); await set('report', 'tasks');
+  ok(await js('!!document.querySelector("#print .sheet.flow table")'), 'reports flow across pages');
+  await js('window.print = () => { window.__studio = (window.__studio || 0) + 1; }');
+  await js('document.querySelector("[data-psact=print]").click()');
+  await waitFor(() => js('window.__studio === 1'), 'print to be called');
+  ok(await js('document.body.classList.contains("printing-studio")'), 'only the studio pages print');
+  ok(/@page\{size:297mm 210mm/.test(await js('document.querySelector("#page-setup").textContent')), 'page size set for the printer');
+  ok(/counter\(page\)/.test(await js('document.querySelector("#page-setup").textContent')), 'reports number their pages');
+  await js('document.body.classList.remove("printing-studio")');
+  await set('what', 'gantt');
+  await key('Escape', 'Escape', 27);
+  ok(!(await js('!!document.querySelector("#print")')), 'Esc closes the studio');
+  ok(await js('document.documentElement.dataset.theme') === theme, 'the app look comes back');
+  ok(await js('JSON.parse(localStorage.getItem("rplan.print")).paper') === 'A4', 'settings are remembered');
 });
 
 await test('no JavaScript errors were thrown on the page', async () => {

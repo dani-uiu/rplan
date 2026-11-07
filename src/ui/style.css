@@ -521,7 +521,8 @@ dialog::backdrop{background:rgba(5,8,14,.55);backdrop-filter:blur(2px)}
 .ps-side select,.ps-side input[type=text],.ps-side input[type=number],.ps-side input[type=date]{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:5px 8px;width:100%}
 .ps-row{display:flex;gap:8px;align-items:end}
 .ps-checks{display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;font-size:12px}
-.ps-checks label{display:flex;gap:6px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.ps-checks label{display:flex;gap:6px;align-items:center;cursor:pointer;min-width:0;line-height:1.25}
+.ps-checks input{flex:none;margin:0}
 .ps-hf{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px}
 .ps-acts{display:flex;gap:8px;margin-top:4px}
 .ps-prev{overflow:auto;padding:0 24px 24px;position:relative}
