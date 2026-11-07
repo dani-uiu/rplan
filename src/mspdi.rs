@@ -289,6 +289,15 @@ pub fn import(xml: &str) -> Result<Project, String> {
             res.overtime = r.get("OvertimeRate").and_then(|x| x.parse().ok()).unwrap_or(0.0);
             res.per_use = r.get("CostPerUse").and_then(|x| x.parse().ok()).unwrap_or(0.0);
             res.unit = clean(r.get("MaterialLabel").unwrap_or(""));
+            res.group = clean(r.get("Group").unwrap_or(""));
+            res.initials = clean(r.get("Initials").unwrap_or(""));
+            res.email = clean(r.get("EmailAddress").unwrap_or(""));
+            res.note = clean(r.get("Notes").unwrap_or(""));
+            res.accrue = match r.get("AccrueAt") {
+                Some("1") => Accrue::Start,
+                Some("2") => Accrue::End,
+                _ => Accrue::Prorated,
+            };
             res.capacity = r.get("MaxUnits").and_then(|x| x.parse::<f64>().ok()).map(|u| (u * 100.0).round() as u32).filter(|&u| u > 0).unwrap_or(100);
             if let Some(c) = r.get("CalendarUID").and_then(|u| cal_by_uid.get(u)) {
                 if !base.is_some_and(|b| std::ptr::eq(b, *c)) {
@@ -372,7 +381,8 @@ pub fn import(xml: &str) -> Result<Project, String> {
                 let lag = l.get("LinkLag").and_then(|x| x.parse::<f64>().ok()).map(|x| (x / 10.0).round() as i64).unwrap_or(0);
                 // LagFormat 5–12 are working units; elapsed ones are 4,6,8,10,12 (+ the "?" variants).
                 let elapsed = matches!(l.get("LagFormat"), Some("4" | "6" | "8" | "10" | "12" | "36" | "38" | "40" | "42" | "44"));
-                task.deps.push(Dep { id: pid, kind, lag, elapsed });
+                let pct = matches!(l.get("LagFormat"), Some("19" | "20")).then(|| l.get("LinkLag").and_then(|x| x.parse::<f64>().ok()).map_or(0, |x| (x / 10.0).round() as i32));
+                task.deps.push(Dep { id: pid, kind, lag: if pct.is_some() { 0 } else { lag }, elapsed, pct });
             }
             for b in t.all("Baseline") {
                 let n: usize = b.get("Number").and_then(|x| x.parse().ok()).unwrap_or(0);
@@ -395,10 +405,23 @@ pub fn import(xml: &str) -> Result<Project, String> {
             let raw = a.get("Units").and_then(|x| x.parse::<f64>().ok()).unwrap_or(1.0);
             let kind = p.resources.iter().find(|r| &r.name == name).map(|r| r.kind).unwrap_or(ResKind::Work);
             let asg = match kind {
-                ResKind::Work => Assign::person(name, ((raw * 100.0).round() as u32).max(1)),
+                ResKind::Work => Assign {
+                    // Delay is in tenths of minutes.
+                    delay: a.get("Delay").and_then(|x| x.parse::<f64>().ok()).map_or(0, |x| (x / 10.0).round() as i64).max(0),
+                    contour: match a.get("WorkContour") {
+                        Some("1") => Contour::Back,
+                        Some("2") => Contour::Front,
+                        Some("4") => Contour::Early,
+                        Some("5") => Contour::Late,
+                        Some("6") => Contour::Bell,
+                        Some("7") => Contour::Turtle,
+                        _ => Contour::Flat,
+                    },
+                    ..Assign::person(name, ((raw * 100.0).round() as u32).max(1))
+                },
                 // Materials: units are the quantity. Cost resources: the amount is in <Cost>.
-                ResKind::Material => Assign { name: name.clone(), units: 100, amount: raw, form: Form::Qty },
-                ResKind::Cost => Assign { name: name.clone(), units: 100, amount: a.get("Cost").and_then(|x| x.parse().ok()).unwrap_or(0.0), form: Form::Money },
+                ResKind::Material => Assign { amount: raw, form: Form::Qty, ..Assign::person(&name, 100) },
+                ResKind::Cost => Assign { amount: a.get("Cost").and_then(|x| x.parse().ok()).unwrap_or(0.0), form: Form::Money, ..Assign::person(&name, 100) },
             };
             if let Some((_, t)) = tasks.iter_mut().find(|(u, _)| u == tu) {
                 if !t.who.iter().any(|w| &w.name == name) {
@@ -526,7 +549,7 @@ pub fn export(p: &Project) -> Result<String, String> {
         tag(&mut x, "UID", &t.id.to_string());
         tag(&mut x, "ID", &(i + 1).to_string());
         tag(&mut x, "Name", &t.name);
-        tag(&mut x, "Type", if t.work.is_some() { "2" } else { "1" });
+        tag(&mut x, "Type", if t.work.is_some() && t.fixed_units { "0" } else if t.work.is_some() { "2" } else { "1" });
         tag(&mut x, "IsNull", "0");
         tag(&mut x, "WBS", &wbs[i]);
         tag(&mut x, "OutlineNumber", &wbs[i]);
@@ -598,8 +621,8 @@ pub fn export(p: &Project) -> Result<String, String> {
                 x,
                 "<PredecessorLink><PredecessorUID>{}</PredecessorUID><Type>{ty}</Type><CrossProject>0</CrossProject><LinkLag>{}</LinkLag><LagFormat>{}</LagFormat></PredecessorLink>",
                 d.id,
-                d.lag * 10,
-                if d.elapsed { 8 } else { 7 }
+                d.pct.map_or(d.lag * 10, |x| x as i64 * 10),
+                if d.pct.is_some() { 19 } else if d.elapsed { 8 } else { 7 }
             );
         }
         for (n, b) in t.baselines.iter().enumerate() {
@@ -624,7 +647,17 @@ pub fn export(p: &Project) -> Result<String, String> {
             ResKind::Work => 1,
             ResKind::Cost => 2,
         };
-        let label = if r.unit.is_empty() { String::new() } else { format!("<MaterialLabel>{}</MaterialLabel>", xml_esc(&r.unit)) };
+        let mut label = if r.unit.is_empty() { String::new() } else { format!("<MaterialLabel>{}</MaterialLabel>", xml_esc(&r.unit)) };
+        for (k, v) in [("Group", &r.group), ("Initials", &r.initials), ("EmailAddress", &r.email), ("Notes", &r.note)] {
+            if !v.is_empty() {
+                let _ = write!(label, "<{k}>{}</{k}>", xml_esc(v));
+            }
+        }
+        let _ = write!(label, "<AccrueAt>{}</AccrueAt>", match r.accrue {
+            Accrue::Start => 1,
+            Accrue::End => 2,
+            Accrue::Prorated => 3,
+        });
         let _ = write!(
             x,
             "<Resource><UID>{0}</UID><ID>{0}</ID><Name>{1}</Name><Type>{ty}</Type><IsNull>0</IsNull>{label}<MaxUnits>{2:.2}</MaxUnits><StandardRate>{3}</StandardRate><StandardRateFormat>2</StandardRateFormat><OvertimeRate>{5}</OvertimeRate><OvertimeRateFormat>2</OvertimeRateFormat><CostPerUse>{6}</CostPerUse><CalendarUID>{4}</CalendarUID></Resource>",
@@ -646,7 +679,19 @@ pub fn export(p: &Project) -> Result<String, String> {
         for a in &t.who {
             let Some(k) = people.iter().position(|r| r.name == a.name) else { continue };
             let (units, work, cost) = match people[k].kind {
-                ResKind::Work => (a.units as f64 / 100.0, s.tasks[i].dur * a.units as i64 / 100, String::new()),
+                ResKind::Work => {
+                    let contour = match a.contour {
+                        Contour::Flat => 0,
+                        Contour::Back => 1,
+                        Contour::Front => 2,
+                        Contour::Early => 4,
+                        Contour::Late => 5,
+                        Contour::Bell => 6,
+                        Contour::Turtle => 7,
+                    };
+                    let work = a.work.unwrap_or(if a.detailed() { crate::schedule::base_duration(p, t) * a.units as i64 / 100 } else { s.tasks[i].dur * a.units as i64 / 100 });
+                    (a.units as f64 / 100.0, work, format!("<Delay>{}</Delay><WorkContour>{contour}</WorkContour>", a.delay * 10))
+                }
                 ResKind::Material => (a.amount, 0, String::new()),
                 ResKind::Cost => (1.0, 0, format!("<Cost>{:.2}</Cost>", a.amount)),
             };
@@ -680,6 +725,20 @@ mod tests {
         assert!(parse_xml("<a><b></a>").is_err());
         assert_eq!(parse_iso_dur("PT8H30M0S", 480), 510);
         assert_eq!(parse_iso_dur("P1DT2H", 480), 600);
+    }
+
+    #[test]
+    fn exports_and_imports_people_details_percent_lags_and_contours() {
+        let src = "project D\nstart 2026-11-09\nresource Ana | rate 10 | accrue start | group Eng | initials AG | email a@example.com | note Lead\ntask 1 | A | 2d | | Ana | 0\ntask 2 | B | 2d | 1SS+50% | Ana[50% delay=4h contour=bell] | 0 | work=8h; type=units\n";
+        let p = Project::parse(src).unwrap();
+        let xml = export(&p).unwrap();
+        assert!(xml.contains("<LinkLag>500</LinkLag><LagFormat>19</LagFormat>") && xml.contains("<Type>0</Type>"), "{xml}");
+        let q = import(&xml).unwrap();
+        let r = q.resources.iter().find(|r| r.name == "Ana").unwrap();
+        assert_eq!((r.group.as_str(), r.initials.as_str(), r.email.as_str(), r.note.as_str(), r.accrue), ("Eng", "AG", "a@example.com", "Lead", Accrue::Start));
+        let b = q.tasks.iter().find(|t| t.id == 2).unwrap();
+        assert_eq!(b.deps[0].pct, Some(50));
+        assert_eq!((b.who[0].delay, b.who[0].contour), (240, Contour::Bell));
     }
 
     #[test]
@@ -731,7 +790,7 @@ task 4 | Done | 0 | 3FF-30m
         let p = import(xml).unwrap();
         assert_eq!(p.name, "libre");
         assert_eq!(p.tasks.len(), 2);
-        assert_eq!(p.tasks[1].deps, vec![Dep { id: 5, kind: Link::FS, lag: 480, elapsed: false }]);
+        assert_eq!(p.tasks[1].deps, vec![Dep { id: 5, kind: Link::FS, lag: 480, elapsed: false, pct: None }]);
         assert_eq!(p.tasks[1].who[0].name, "Dev");
         assert!(p.tasks[0].who.is_empty());
         assert!(import("<html></html>").is_err());

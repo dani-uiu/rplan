@@ -173,6 +173,17 @@ async function act(a, el) {
     case 'del-sel': { const n = sel.size; commit(m => { removeTasks(m, new Set(sel)); }, T('Deleted {0} task(s) — Ctrl+Z to undo', n)); break; }
     case 'link-chain': commit(m => { const ts = m.tasks.filter(t => sel.has(t.id) && !D.tasks.find(x => x.id === t.id).summary); for (let i = 1; i < ts.length; i++) if (!ts[i].deps.some(d => d.id === ts[i - 1].id)) ts[i].deps.push({ id: ts[i - 1].id, kind: 'FS', lag: 0, elapsed: false }); }, T('Linked the selected tasks in order')); break;
     case 'level': action('/api/level'); break;
+    case 'lvl-opt': commit(m => { m.leveling[arg] = !m.leveling[arg]; }, T('Leveling options saved — level again to apply them')); break;
+    case 'lvl-order': commit(m => { m.leveling.order = arg; }, T('Leveling options saved — level again to apply them')); break;
+    case 'update-progress': if (D.status == null) { toast(T('Set a status date first (at the top of the window)'), 1); break; } action('/api/progress'); break;
+    case 'tracking': store('tracking', store('tracking') === '1' ? '0' : '1'); if (view !== 'gantt') setView('gantt'); else render(); break;
+    case 'people-mode': store('peopleMode', el.dataset.v); render(); break;
+    case 'rate-add': commit(m => { const r = ensureRes(m, dlgArg); r.rates.push([Math.max(0, todayOff()), r.rates.length ? r.rates[r.rates.length - 1][1] : r.rate]); r.rates.sort((a, b) => a[0] - b[0]); }); break;
+    case 'rate-rm': commit(m => { ensureRes(m, dlgArg).rates.splice(k, 1); }); break;
+    case 'cap-add': commit(m => { const r = ensureRes(m, dlgArg); r.caps.push([Math.max(0, todayOff()), 50]); r.caps.sort((a, b) => a[0] - b[0]); }); break;
+    case 'cap-rm': commit(m => { ensureRes(m, dlgArg).caps.splice(k, 1); }); break;
+    case 'fld-add': commit(m => { let n = 1; while (m.fields.some(f => f.name === T('Field {0}', n))) n++; m.fields.push({ name: T('Field {0}', n), kind: 'text', values: [] }); }); break;
+    case 'fld-rm': commit(m => { const name = m.fields[k].name; m.fields.splice(k, 1); m.tasks.forEach(t => { delete t.x[name]; }); }); break;
     case 'unlevel': action('/api/unlevel'); break;
     case 'baseline': action('/api/baseline?n=' + arg, D.tasks.some(t => t.baselines.some(b => b.n === +arg)) ? T('Replace the saved baseline with the current dates?') : null); break;
     case 'baseline-clear': action('/api/baseline/clear?n=' + arg); break;
@@ -221,8 +232,8 @@ async function act(a, el) {
     case 'dep-add': onTask(t => { const i = tIdx(t.id), rel = relatives(i); const ok = x => !rel.has(x.id) && !t.deps.some(d => d.id === x.id); const cand = D.tasks.slice(0, i).reverse().find(ok) || D.tasks.find(ok); if (!cand) throw new Error(T('There are no other tasks to link to')); t.deps.push({ id: cand.id, kind: 'FS', lag: 0, elapsed: false }); }); break;
     case 'dep-rm': onTask(t => { t.deps.splice(k, 1); }); break;
     case 'xdep-rm': onTask(t => { t.xdeps.splice(k, 1); }); break;
-    case 'who-add': onTask(t => { const r = D.resources.find(r => !t.who.some(a => a.name === r.name)); t.who.push(r ? (r.kind === 'work' ? { name: r.name, units: 100, amount: 100, form: 'pct' } : r.kind === 'material' ? { name: r.name, units: 100, amount: 1, form: 'qty' } : { name: r.name, units: 100, amount: 0, form: 'money' }) : { name: T('New person'), units: 100, amount: 100, form: 'pct' }); }); break;
-    case 'who-rm': onTask(t => { t.who.splice(k, 1); }); break;
+    case 'who-add': onTask(t => { const before = unitsSum(t); const r = D.resources.find(r => !t.who.some(a => a.name === r.name)); t.who.push(r ? (r.kind === 'work' ? { name: r.name, units: 100, amount: 100, form: 'pct' } : r.kind === 'material' ? { name: r.name, units: 100, amount: 1, form: 'qty' } : { name: r.name, units: 100, amount: 0, form: 'money' }) : { name: T('New person'), units: 100, amount: 100, form: 'pct' }); keepDuration(t, before); }); break;
+    case 'who-rm': onTask(t => { const before = unitsSum(t); t.who.splice(k, 1); keepDuration(t, before); }); break;
     case 'clear-delay': onTask(t => { t.delay = 0; }); break;
     case 'act-start': onTask(t => { const d = Math.max(sDay(task(t.id)), todayOff()); t.as = d * 1440 + ((dayHours(d)[0] || STD[0])[0]); if (!t.pct) t.pct = 1; }, T('Marked as started')); break;
     case 'act-done': onTask(t => { const cur = task(t.id); t.as = t.as ?? cur.es; t.af = Math.max(t.as, Math.min(cur.ef, (todayOff() + 1) * 1440)); t.pct = 100; }, T('Marked complete ✓')); break;
@@ -301,14 +312,14 @@ document.addEventListener('change', e => {
   if (el.id === 'pstart') return v && commit(m => { m.start = v; }, T('Project now starts {0}', v));
   if (el.id === 'pstatus') return commit(m => { m.status = v ? offOf(v) : null; }, v ? T('Status date: {0}', v) : T('Status date removed'));
   if (el.id === 'file') return importFile(el);
-  if (el.dataset.c) { const cur = new Set(visibleCols()); el.checked ? cur.add(el.dataset.c) : cur.delete(el.dataset.c); store('cols', JSON.stringify(Object.keys(COLUMNS).filter(c => cur.has(c)))); return render(); }
+  if (el.dataset.c) { const cur = new Set(visibleCols()); el.checked ? cur.add(el.dataset.c) : cur.delete(el.dataset.c); store('cols', JSON.stringify([...Object.keys(COLUMNS), ...D.fields.map(f => 'x:' + f.name)].filter(c => cur.has(c)))); return render(); }
   if (el.dataset.rep) { report[el.dataset.rep] = el.value; if (el.dataset.rep !== 'kind') store(el.dataset.rep, el.value); return renderReport(); }
   if (el.dataset.f && el.dataset.f !== 'new') {
     const id = +el.dataset.id, f = el.dataset.f;
     return commit(m => {
       const t = mt(m, id); if (!t) return false;
       if (f === 'name') { if (!v) return false; t.name = v; }
-      if (f === 'dur') [t.dur, t.elapsed] = parseDurE(v);
+      if (f === 'dur') { if (t.fixedUnits && t.work != null) t.work = Math.round(parseDurE(v)[0] * (unitsSum(t) || 1)); else [t.dur, t.elapsed] = parseDurE(v); }
       if (f === 'work') t.work = parseEffort(v);
       if (f === 'pct') { const n = parseInt(v, 10); if (!(n >= 0)) throw new Error(T('% done must be 0–100')); t.pct = Math.min(100, n); if (n < 100) t.af = null; }
       if (f === 'priority') { const n = parseInt(v, 10); if (!(n >= 0 && n <= 1000)) throw new Error(T('Priority must be 0–1000')); t.priority = n; }
@@ -333,11 +344,24 @@ function inspChange(el, v) {
   }
   commit(m => {
     const t = mt(m, primary); if (!t) return false;
-    const cur = task(primary);
+    const cur = task(primary), before = unitsSum(t);
     switch (f) {
       case 'name': if (!v) return false; t.name = v; break;
       case 'note': t.note = v; break;
-      case 'dur': [t.dur, t.elapsed] = parseDurE(v); break;
+      case 'dur': if (t.fixedUnits && t.work != null) t.work = Math.round(parseDurE(v)[0] * (before || 1)); else [t.dur, t.elapsed] = parseDurE(v); break;
+      case 'ttype':
+        if (v === 'duration') { if (t.work != null) t.dur = cur.edur; t.work = null; t.fixedUnits = false; }
+        else { if (t.work == null) t.work = Math.round(cur.edur * (before || 1)); t.fixedUnits = v === 'units'; }
+        break;
+      case 'who-delay': t.who[k].delay = v ? Math.max(0, parseDur(v)) : 0; break;
+      case 'who-work': t.who[k].work = parseEffort(v); break;
+      case 'who-contour': t.who[k].contour = v; break;
+      case 'xf': {
+        const name = el.dataset.name, fd = D.fields.find(x => x.name === name), val = fd?.kind === 'flag' ? (el.checked ? 'yes' : '') : cl(v);
+        if (fd?.kind === 'number' && val && !isFinite(+val.replace(',', '.'))) throw new Error(T('That isn\'t a number'));
+        if (val) t.x[name] = val; else delete t.x[name];
+        break;
+      }
       case 'work': t.work = parseEffort(v); break;
       case 'elapsed': { const on = el.checked; if (on !== t.elapsed) { t.dur = on ? Math.round(t.dur / dmin() * 1440) : Math.round(t.dur / 1440 * dmin()); t.elapsed = on; } break; }
       case 'pct': { const n = parseInt(v, 10); if (!(n >= 0)) throw new Error(T('% done must be 0–100')); t.pct = Math.min(100, n); if (n < 100) t.af = null; break; }
@@ -346,7 +370,7 @@ function inspChange(el, v) {
       case 'ac': t.ac = v === '' ? null : +v.replace(',', '.'); if (t.ac != null && !isFinite(t.ac)) throw new Error(T('Cost must be a number')); break;
       case 'dep-id': t.deps[k].id = +v; break;
       case 'dep-kind': t.deps[k].kind = v; break;
-      case 'dep-lag': [t.deps[k].lag, t.deps[k].elapsed] = parseLagE(v); break;
+      case 'dep-lag': [t.deps[k].lag, t.deps[k].elapsed, t.deps[k].pct] = parseLagE(v); break;
       case 'xdep-add': {
         if (!v) return false;
         const mm = v.match(/^(.+?\.plan)\s*#\s*(\d+)\s*(FS|SS|FF|SF)?\s*(?:([+-])\s*(.+))?$/i);
@@ -381,8 +405,13 @@ function inspChange(el, v) {
       case 'sub': t.sub = v || null; break;
       case 'fixed': { const n = v === '' ? 0 : +v.replace(/[^\d.\-]/g, ''); if (!isFinite(n)) throw new Error(T('Cost must be a number')); t.fixed = n; break; }
     }
+    if (f === 'who-amt' || f === 'who-name') keepDuration(t, before);
   });
 }
+// Hours per day of the people on a task (100% = one full-time person).
+function unitsSum(t) { return t.who.filter(a => (resOf(a.name)?.kind || 'work') === 'work').reduce((s, a) => s + a.units, 0) / 100; }
+// Fixed-units tasks keep their duration when people change: the work follows.
+function keepDuration(t, before) { if (t.fixedUnits && t.work != null && before > 0) t.work = Math.round(t.work / before * (unitsSum(t) || before)); }
 function calChange(el, v) {
   const f = el.dataset.cal, d = +el.dataset.d, k = +el.dataset.k;
   commit(m => {
@@ -405,6 +434,9 @@ function calChange(el, v) {
       case 'ex-name': m.exceptions[k].name = cl(v); break;
       case 'ex-hours': { const h = parseHours(v); if (!h.length) throw new Error(T('A working day needs hours (or switch it to "Day off")')); m.exceptions[k].hours = h; break; }
       case 'rec-rule': case 'rec-name': { const row = el.closest('.recrow'); m.recurring[k] = `${row.querySelector('[data-cal="rec-rule"]').value.trim()} ${cl(row.querySelector('[data-cal="rec-name"]').value)}`.trim(); break; }
+      case 'fld-name': { const old = m.fields[k].name, n = fieldName(v); if (!n || n === old) return false; if (m.fields.some((x, j) => j !== k && x.name === n)) throw new Error(T('There\'s already a field called {0}', n)); m.fields[k].name = n; m.tasks.forEach(t => { if (old in t.x) { t.x[n] = t.x[old]; delete t.x[old]; } }); break; }
+      case 'fld-kind': m.fields[k].kind = v; if (v === 'flag' || v === 'date') m.fields[k].values = []; break;
+      case 'fld-values': m.fields[k].values = v.split(',').map(x => cl(x)).filter(Boolean); break;
       case 'ncal-name': { const old = m.calendars[k].name, n = cl(v); if (!n) return false; if (m.calendars.some((c, j) => j !== k && c.name === n)) throw new Error(T('There\'s already a calendar called {0}', n)); m.calendars[k].name = n; m.tasks.forEach(t => { if (t.cal === old) t.cal = n; }); break; }
     }
   });
@@ -424,6 +456,12 @@ function resChange(el, v) {
     if (f === 'overtime') r.overtime = num2(v);
     if (f === 'capacity') { if (r.kind === 'work') { const n = parseInt(v, 10); if (!(n >= 1 && n <= 1000)) throw new Error(T('Capacity must be 1–1000%')); r.capacity = n; } else r.unit = rn(v); }
     if (f === 'off') r.off = parseRanges(v);
+    if (['group', 'initials', 'email', 'note'].includes(f)) r[f] = cl(v);
+    if (f === 'accrue') r.accrue = v;
+    const k = +el.dataset.k;
+    if (f === 'rate-at' || f === 'cap-at') { if (!v) return false; (f === 'rate-at' ? r.rates : r.caps)[k][0] = offOf(v); (f === 'rate-at' ? r.rates : r.caps).sort((a, b) => a[0] - b[0]); }
+    if (f === 'rate-v') r.rates[k][1] = num2(v);
+    if (f === 'cap-v') { const n = parseInt(v, 10); if (!(n >= 1 && n <= 1000)) throw new Error(T('Capacity must be 1–1000%')); r.caps[k][1] = n; }
   }, f === 'new' ? T('Added {0}', rn(v)) : null);
 }
 async function importFile(input) {

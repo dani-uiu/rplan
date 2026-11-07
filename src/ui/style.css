@@ -557,3 +557,12 @@ dialog::backdrop{background:rgba(5,8,14,.55);backdrop-filter:blur(2px)}
   body.printing-studio .sheet.flow{width:auto!important;padding:0!important;min-height:0!important}
   body.printing-studio *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
+
+/* per-person assignment details */
+.whomore{display:grid;grid-template-columns:1fr 1fr 1.2fr;gap:6px;margin:-2px 0 8px 10px;padding-left:8px;border-left:2px solid var(--line)}
+.whomore label{display:grid;gap:2px;font-size:10.5px;color:var(--mut)}
+.whomore input,.whomore select{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:3px 6px;color:var(--fg);width:100%;font-size:12px}
+/* tracking Gantt: the plan on top, the baseline below it */
+.tracking .bar{height:11px;margin-top:-2px}
+.tracking .bar .in{display:none}
+.tracking .base{height:8px;margin-top:-12px;opacity:1;border-radius:2px;background:repeating-linear-gradient(-45deg,var(--dim) 0 2px,transparent 2px 5px);box-shadow:inset 0 0 0 1px var(--dim)}

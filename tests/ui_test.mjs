@@ -81,7 +81,14 @@ const rect = sel => js(`(() => { const el = document.querySelector(${JSON.string
 const file = () => fs.readFileSync(plan, 'utf8');
 const taskLine = id => file().split('\n').find(l => new RegExp(`^\\s*task ${id} \\|`).test(l)) || '';
 const settle = () => js('chain.then(() => new Promise(r => setTimeout(r, 30)))');
-async function shot(name) { if (!shots) return; fs.mkdirSync(shots, { recursive: true }); const r = await cdp('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(path.join(shots, name + '.png'), Buffer.from(r.data, 'base64')); }
+// Screenshots are best-effort: a capture that never returns mustn't stall the run.
+async function shot(name) {
+  if (!shots) return;
+  fs.mkdirSync(shots, { recursive: true });
+  const r = await Promise.race([cdp('Page.captureScreenshot', { format: 'png' }), sleep(15000).then(() => null)]);
+  if (!r) { console.log(`      (screenshot ${name} timed out)`); return; }
+  fs.writeFileSync(path.join(shots, name + '.png'), Buffer.from(r.data, 'base64'));
+}
 
 async function test(name, fn) {
   try { await fn(); passed++; console.log(`  ✓ ${name}`); }
@@ -374,7 +381,59 @@ await test('every feature survives a round trip through the interface (nothing i
   ok(before.includes('holiday every 12-25 observed Christmas') && before.includes('type material'), 'fixture loaded');
 });
 
+await test('people timing, contours, task types, custom fields, leveling options, tracking, RBS', async () => {
+  await replaceProject(richText);
+  // Percent lag and per-person details came through.
+  const t7 = await js('D.tasks.find(t => t.id === 7)');
+  ok(t7.deps[0].pct === 50 && t7.who[0].delay === 240 && t7.who[0].work === 360 && t7.who[0].contour === 'bell', 'details: ' + JSON.stringify([t7.deps, t7.who]));
+  ok(t7.fixedUnits && t7.x.Dept === 'Eng.Backend' && t7.lsplits.length === 1, 'type, fields and leveling pauses');
+  // Details panel: change a contour and the task type.
+  await js('openDetails(7)'); await sleep(60);
+  ok(await js('!!document.querySelector("[data-insp=who-contour]")'), 'per-person row shown');
+  await js(`(() => { const s = document.querySelector('[data-insp="who-contour"]'); s.value = 'back'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await settle();
+  ok(/Bo\[50% delay=4h work=6h contour=back\]/.test(taskLine(7)), 'contour saved: ' + taskLine(7));
+  await js(`(() => { const s = document.querySelector('[data-insp="ttype"]'); s.value = 'duration'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await settle();
+  ok(!/type=units|work=8h/.test(taskLine(7)), 'back to fixed duration: ' + taskLine(7));
+  // A percent lag typed in the predecessors box.
+  await js(`(() => { const i = document.querySelector('[data-insp="dep-lag"]'); i.value = '+25%'; i.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await settle();
+  ok(/\| 6FS\+25% \|/.test(taskLine(7)), 'percent lag: ' + taskLine(7));
+  // Custom field in the details panel.
+  await js(`(() => { const s = document.querySelector('[data-insp="xf"][data-name="Dept"]'); s.value = 'Sales'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await settle();
+  ok(/x:Dept=Sales/.test(taskLine(7)), 'custom field saved: ' + taskLine(7));
+  // Group the Gantt by a custom field, and show it as a column.
+  await js('act("group:x:Dept")'); await sleep(30);
+  ok((await js('[...document.querySelectorAll(".row.grp")].map(r => r.textContent).join("|")')).includes('Sales'), 'grouped by Dept');
+  await js('act("clear-filters")');
+  // Leveling options are saved in the file.
+  await js('act("lvl-opt:slack")'); await settle();
+  ok(/^leveling split order=id$/m.test(file()), 'slack option toggled off: ' + (file().match(/^leveling.*$/m) || [''])[0]);
+  // Tracking Gantt.
+  await js('act("tracking")'); await sleep(30);
+  ok(await js('!!document.querySelector(".gt.tracking")'), 'tracking Gantt on');
+  await shot('tracking-gantt');
+  await js('act("tracking")');
+  // People: details dialog and the RBS chart.
+  await js('openDialog("reshours", "Ana")'); await sleep(40);
+  ok(await js('document.querySelector("[data-res=group]").value') === 'Eng/Backend', 'group shown');
+  await js('act("rate-add")'); await settle();
+  ok((file().split('\n').find(l => l.startsWith('resource Ana')).match(/rate [\d.]+ from/g) || []).length === 2, 'a second rate change added');
+  await js('$("#dlg").close(); dlgKind = null');
+  await js('setView("resources"); act("people-mode", { dataset: { v: "rbs" } })'); await sleep(40);
+  ok((await js('document.querySelector("#main").textContent')).includes('Backend'), 'RBS shows the group');
+  await shot('rbs');
+  await js('act("people-mode", { dataset: { v: "table" } }); setView("gantt")');
+  // Update progress to the status date.
+  await js('commit(m => { m.status = offOf("2026-11-25"); })'); await settle();
+  await js('act("update-progress")'); await settle();
+  ok(await js('D.tasks.find(t => t.id === 5).pct') === 100, 'Cure (before the status date) is complete now');
+});
+
 await test('effort-driven work, materials, costs and earned value are shown', async () => {
+  await replaceProject(richText);
   const t2 = await js('D.tasks.find(t => t.id === 2)');
   ok(t2.work === 2400 && t2.edur > 0 && t2.edur !== t2.dur, 'effort-driven duration');
   ok(t2.cost > 1000, 'costs include rate, per use, overtime, material and travel: ' + t2.cost);
@@ -627,6 +686,14 @@ await test('print studio: page preview, fit to pages, other views, header/footer
   ok(!(await js('!!document.querySelector("#print")')), 'Esc closes the studio');
   ok(await js('document.documentElement.dataset.theme') === theme, 'the app look comes back');
   ok(await js('JSON.parse(localStorage.getItem("rplan.print")).paper') === 'A4', 'settings are remembered');
+});
+
+await test('the page stays idle when nothing changes (no redraw loop)', async () => {
+  await js('closePrint?.(); window.__renders = 0; window.__render0 = window.__render0 || render; window.render = function () { window.__renders++; return window.__render0.apply(this, arguments); }');
+  await sleep(4000);
+  const n = await js('window.__renders');
+  await js('window.render = window.__render0');
+  ok(n === 0, `redrew ${n} times in 4 s with nothing changing`);
 });
 
 await test('no JavaScript errors were thrown on the page', async () => {

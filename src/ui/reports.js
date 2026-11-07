@@ -80,6 +80,8 @@ function repWho() {
 /* Cost spread over each task's working days (weighted by its usage when we have it). */
 function costByDay(useBaseline) {
   const out = new Map(), add = (d, v) => out.set(d, (out.get(d) || 0) + v);
+  // The server knows when each cost is spent (rates by date, start/end accrual).
+  if (!useBaseline && usage?.costs) { for (const [, days] of usage.costs) for (const [d, c] of days) add(d, c); return out; }
   const byTask = usage ? new Map(usage.tasks.map(([id, days]) => [id, days])) : new Map();
   for (const t of D.tasks) {
     if (t.summary || t.inactive) continue;

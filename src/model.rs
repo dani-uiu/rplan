@@ -60,6 +60,8 @@ pub struct Dep {
     /// Minutes; may be negative (lead). Working time unless `elapsed`.
     pub lag: i64,
     pub elapsed: bool,
+    /// Lag as a percent of the predecessor's duration (`3FS+50%`); replaces `lag`.
+    pub pct: Option<i32>,
 }
 
 /// How an assignment's number was written: `Bo[50%]`, `Cement[20]`, `Travel[$400]`.
@@ -78,11 +80,66 @@ pub struct Assign {
     /// Quantity (materials) or money (cost resources).
     pub amount: f64,
     pub form: Form,
+    /// Working minutes after the task starts before this person starts on it.
+    pub delay: i64,
+    /// This person's own work (minutes); their part lasts work ÷ units.
+    pub work: Option<i64>,
+    /// How their work is spread over their part of the task.
+    pub contour: Contour,
+}
+
+/// Work contours: how an assignment's hours are spread over its time.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum Contour {
+    #[default]
+    Flat,
+    Front,
+    Back,
+    Bell,
+    Early,
+    Late,
+    Turtle,
+}
+
+impl Contour {
+    pub const ALL: [Contour; 7] = [Contour::Flat, Contour::Front, Contour::Back, Contour::Bell, Contour::Early, Contour::Late, Contour::Turtle];
+    pub fn code(self) -> &'static str {
+        match self {
+            Contour::Flat => "flat",
+            Contour::Front => "front",
+            Contour::Back => "back",
+            Contour::Bell => "bell",
+            Contour::Early => "early",
+            Contour::Late => "late",
+            Contour::Turtle => "turtle",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Contour> {
+        Contour::ALL.into_iter().find(|c| c.code() == s.to_ascii_lowercase().trim_end_matches("-loaded").trim_end_matches("-peak"))
+    }
+    /// Relative intensity at position x (0 = start, 1 = end of the assignment).
+    pub fn weight(self, x: f64) -> f64 {
+        let x = x.clamp(0.0, 1.0);
+        let pi = std::f64::consts::PI;
+        match self {
+            Contour::Flat => 1.0,
+            Contour::Front => 1.0 - 0.8 * x,
+            Contour::Back => 0.2 + 0.8 * x,
+            Contour::Bell => 0.15 + 0.85 * (pi * x).sin(),
+            Contour::Early => if x < 0.25 { 0.3 + 0.7 * x / 0.25 } else { 1.0 - 0.8 * (x - 0.25) / 0.75 },
+            Contour::Late => Contour::Early.weight(1.0 - x),
+            Contour::Turtle => 0.5 + 0.5 * (pi * x).sin(),
+        }
+    }
 }
 
 impl Assign {
     pub fn person(name: &str, units: u32) -> Assign {
-        Assign { name: name.into(), units, amount: units as f64, form: Form::Pct }
+        Assign { name: name.into(), units, amount: units as f64, form: Form::Pct, delay: 0, work: None, contour: Contour::Flat }
+    }
+    /// True if this assignment changes when or how its person works (not just units).
+    pub fn detailed(&self) -> bool {
+        self.delay > 0 || self.work.is_some() || self.contour != Contour::Flat
     }
 }
 
@@ -219,6 +276,13 @@ pub struct Task {
     pub xdeps: Vec<XDep>,
     /// Another .plan file this task stands for.
     pub sub: Option<String>,
+    /// Fixed-units task (with `work`): changing the work changes the duration, the
+    /// people's units stay as they are.
+    pub fixed_units: bool,
+    /// Custom field values (`x:Region=North`), by field name.
+    pub fields: Vec<(String, String)>,
+    /// Pauses added by resource leveling (cleared with the leveling).
+    pub lsplits: Vec<(i64, i64)>,
     // --- resolved at load time, never saved ---
     pub ext: Vec<ExtLink>,
     pub sub_info: Option<SubInfo>,
@@ -253,12 +317,18 @@ impl Task {
             cal: None,
             xdeps: vec![],
             sub: None,
+            fixed_units: false,
+            fields: vec![],
+            lsplits: vec![],
             ext: vec![],
             sub_info: None,
         }
     }
     pub fn baseline(&self) -> Option<Baseline> {
         self.baselines.first().copied().flatten()
+    }
+    pub fn field(&self, name: &str) -> Option<&str> {
+        self.fields.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
     }
 }
 
@@ -288,12 +358,99 @@ pub struct Resource {
     pub week: Option<[Hours; 7]>,
     /// Comes from the shared team file (`pool`), not this project.
     pub pooled: bool,
+    /// Later rates: from this day on, this rate (sorted by day).
+    pub rates: Vec<(i64, f64)>,
+    /// Later capacities: from this day on, this many percent (sorted by day).
+    pub caps: Vec<(i64, u32)>,
+    /// When the cost counts: at the start, at the end, or as the work is done.
+    pub accrue: Accrue,
+    pub group: String,
+    pub initials: String,
+    pub email: String,
+    pub note: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum Accrue {
+    Start,
+    #[default]
+    Prorated,
+    End,
+}
+
+impl Accrue {
+    pub fn code(self) -> &'static str {
+        match self {
+            Accrue::Start => "start",
+            Accrue::Prorated => "prorated",
+            Accrue::End => "end",
+        }
+    }
 }
 
 impl Resource {
     pub fn new(name: &str) -> Resource {
-        Resource { name: name.into(), kind: ResKind::Work, rate: 0.0, capacity: 100, off: vec![], per_use: 0.0, overtime: 0.0, unit: String::new(), week: None, pooled: false }
+        Resource {
+            name: name.into(),
+            kind: ResKind::Work,
+            rate: 0.0,
+            capacity: 100,
+            off: vec![],
+            per_use: 0.0,
+            overtime: 0.0,
+            unit: String::new(),
+            week: None,
+            pooled: false,
+            rates: vec![],
+            caps: vec![],
+            accrue: Accrue::Prorated,
+            group: String::new(),
+            initials: String::new(),
+            email: String::new(),
+            note: String::new(),
+        }
     }
+    /// Cost per hour (or per unit) on a given day.
+    pub fn rate_on(&self, day: i64) -> f64 {
+        self.rates.iter().rev().find(|(d, _)| *d <= day).map_or(self.rate, |x| x.1)
+    }
+    /// Capacity in percent on a given day.
+    pub fn capacity_on(&self, day: i64) -> u32 {
+        self.caps.iter().rev().find(|(d, _)| *d <= day).map_or(self.capacity, |x| x.1)
+    }
+}
+
+/// A custom field: `field Region | text`, `field Dept | code | Eng, Eng.Backend, Sales`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldDef {
+    pub name: String,
+    /// text, number, date, flag or code (an outline code: values like `Eng.Backend`).
+    pub kind: String,
+    /// Allowed values (outline codes and pick lists).
+    pub values: Vec<String>,
+}
+
+pub const FIELD_KINDS: [&str; 5] = ["text", "number", "date", "flag", "code"];
+
+/// How resource leveling works: `leveling slack split order=id`.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct LevelOpts {
+    /// Only use slack: never push the project's finish date.
+    pub slack_only: bool,
+    /// Allow pausing a task that's already under way instead of delaying all of it.
+    pub split: bool,
+    pub order: LevelOrder,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum LevelOrder {
+    /// Priority, then the most slack moves first (whatever delays the finish least).
+    #[default]
+    Standard,
+    /// Priority, then the later task (by id) moves first.
+    Priority,
+    /// Only the task id: the later task moves first.
+    Id,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -319,6 +476,8 @@ pub struct Project {
     pub pool: Option<String>,
     pub resources: Vec<Resource>,
     pub tasks: Vec<Task>,
+    pub fields: Vec<FieldDef>,
+    pub leveling: LevelOpts,
     /// Problems found while loading linked files (not saved).
     pub warnings: Vec<String>,
 }
@@ -338,6 +497,8 @@ impl Default for Project {
             pool: None,
             resources: vec![],
             tasks: vec![],
+            fields: vec![],
+            leveling: LevelOpts::default(),
             warnings: vec![],
         }
     }
@@ -362,6 +523,9 @@ pub fn parse_dur_e(s: &str, day_minutes: i64) -> Result<(i64, bool), String> {
         "h" | "hr" | "hrs" | "hour" | "hours" => (60.0, false),
         "m" | "min" | "mins" => (1.0, false),
         "w" | "wk" | "week" | "weeks" => (day_minutes as f64 * 5.0, false),
+        // A month of duration is 20 working days; an elapsed month is 30 days.
+        "mo" | "mon" | "month" | "months" => (day_minutes as f64 * 20.0, false),
+        "emo" | "emonth" | "emonths" => (43200.0, true),
         "ed" | "edays" => (1440.0, true),
         "eh" | "ehr" | "ehours" => (60.0, true),
         "em" | "emin" => (1.0, true),
@@ -419,20 +583,37 @@ pub fn parse_deps(s: &str, day_minutes: i64) -> Result<Vec<Dep>, String> {
             return Err(bad());
         }
         let id: u32 = p[..digits].parse().map_err(|_| bad())?;
-        let (kind, lag, elapsed) = parse_link_tail(&p[digits..], day_minutes).ok_or_else(bad)?;
-        out.push(Dep { id, kind, lag, elapsed });
+        let (kind, lag, elapsed, pct) = parse_link_tail_pct(&p[digits..], day_minutes).ok_or_else(bad)?;
+        out.push(Dep { id, kind, lag, elapsed, pct });
     }
     Ok(out)
 }
 
 /// `SS+2d` → (kind, lag, elapsed)
 fn parse_link_tail(rest: &str, day_minutes: i64) -> Option<(Link, i64, bool)> {
+    match parse_link_tail_pct(rest, day_minutes)? {
+        (_, _, _, Some(_)) => None,
+        (k, l, e, None) => Some((k, l, e)),
+    }
+}
+
+/// `SS+2d` or `FS+50%` → (kind, lag, elapsed, percent)
+fn parse_link_tail_pct(rest: &str, day_minutes: i64) -> Option<(Link, i64, bool, Option<i32>)> {
     let rest = rest.trim();
+    if let Some(body) = rest.strip_suffix('%') {
+        let letters = body.chars().take_while(char::is_ascii_alphabetic).count();
+        let kind = Link::parse(&body[..letters])?;
+        let n: i32 = body[letters..].trim().trim_start_matches('+').trim().parse().ok()?;
+        if !(-10000..=10000).contains(&n) {
+            return None;
+        }
+        return Some((kind, 0, false, Some(n)));
+    }
     let letters = rest.chars().take_while(char::is_ascii_alphabetic).count();
     let kind = Link::parse(&rest[..letters])?;
     let lag_s = rest[letters..].trim();
     if lag_s.is_empty() {
-        return Some((kind, 0, false));
+        return Some((kind, 0, false, None));
     }
     let (sign, num) = match lag_s.as_bytes()[0] {
         b'+' => (1, &lag_s[1..]),
@@ -440,7 +621,7 @@ fn parse_link_tail(rest: &str, day_minutes: i64) -> Option<(Link, i64, bool)> {
         _ => return None,
     };
     let (v, e) = parse_dur_e(num, day_minutes).ok()?;
-    Some((kind, sign * v, e))
+    Some((kind, sign * v, e, None))
 }
 
 fn fmt_lag(lag: i64, elapsed: bool, dm: i64) -> String {
@@ -453,18 +634,45 @@ fn fmt_lag(lag: i64, elapsed: bool, dm: i64) -> String {
 
 pub fn fmt_deps(deps: &[Dep], day_minutes: i64) -> String {
     deps.iter()
-        .map(|d| format!("{}{}{}", d.id, if d.kind == Link::FS { "" } else { d.kind.as_str() }, fmt_lag(d.lag, d.elapsed, day_minutes)))
+        .map(|d| {
+            let lag = match d.pct {
+                Some(0) => String::new(),
+                Some(n) => format!("{}{n}%", if n > 0 { "+" } else { "" }),
+                None => fmt_lag(d.lag, d.elapsed, day_minutes),
+            };
+            // Percent lags always name the link type, so "3+50%" isn't misread.
+            let kind = if d.kind == Link::FS && d.pct.is_none() { "" } else { d.kind.as_str() };
+            format!("{}{}{}", d.id, kind, lag)
+        })
         .collect::<Vec<_>>()
         .join(",")
 }
 
 /// Resources: `Ana, Bo[50%], Cement[20], Travel[$400]`.
 pub fn parse_who(s: &str) -> Result<Vec<Assign>, String> {
+    parse_who_dm(s, 480)
+}
+
+/// Resources, with per-person details: `Ana[50% delay=1d work=16h contour=back]`.
+pub fn parse_who_dm(s: &str, day_minutes: i64) -> Result<Vec<Assign>, String> {
     let mut out: Vec<Assign> = vec![];
     for part in s.split(',').map(str::trim).filter(|x| !x.is_empty()) {
         let a = match part.split_once('[') {
             Some((n, u)) => {
-                let raw = u.trim_end_matches(']').trim();
+                let inner = u.trim_end_matches(']').trim();
+                let mut amount_tok = "";
+                let (mut delay, mut work, mut contour) = (0, None, Contour::Flat);
+                for tok in inner.split_whitespace() {
+                    match tok.split_once('=') {
+                        Some(("delay", v)) => delay = parse_dur(v, day_minutes).map_err(|e| format!("{part}: {e}"))?.max(0),
+                        Some(("work", v)) => work = Some(parse_dur(v, day_minutes).map_err(|e| format!("{part}: {e}"))?.max(0)),
+                        Some(("contour", v)) => contour = Contour::parse(v).ok_or(format!("{part}: contour must be flat, front, back, bell, early, late or turtle"))?,
+                        Some((k, _)) => return Err(format!("{part}: unknown assignment detail '{k}' (use delay=, work= or contour=)")),
+                        None if amount_tok.is_empty() => amount_tok = tok,
+                        None => return Err(format!("bad amount in '{part}'")),
+                    }
+                }
+                let raw = if amount_tok.is_empty() { "100%" } else { amount_tok };
                 let bad = || format!("bad amount in '{part}' (examples: Bo[50%], Cement[20], Travel[$400])");
                 let (form, num) = if let Some(x) = raw.strip_suffix('%') {
                     (Form::Pct, x.trim())
@@ -481,7 +689,7 @@ pub fn parse_who(s: &str) -> Result<Vec<Assign>, String> {
                 if form == Form::Pct && (units == 0 || units > 1000) {
                     return Err(format!("units in '{part}' must be 1–1000%"));
                 }
-                Assign { name: n.trim().to_string(), units: units.max(1), amount, form }
+                Assign { name: n.trim().to_string(), units: units.max(1), amount, form, delay, work, contour }
             }
             None => Assign::person(part, 100),
         };
@@ -497,11 +705,23 @@ pub fn parse_who(s: &str) -> Result<Vec<Assign>, String> {
 
 pub fn fmt_who(w: &[Assign]) -> String {
     w.iter()
-        .map(|a| match a.form {
-            Form::Pct if a.units == 100 => a.name.clone(),
-            Form::Pct => format!("{}[{}%]", a.name, a.units),
-            Form::Qty => format!("{}[{}]", a.name, fmt_num(a.amount)),
-            Form::Money => format!("{}[${}]", a.name, fmt_num(a.amount)),
+        .map(|a| {
+            let mut more = String::new();
+            if a.delay > 0 {
+                more.push_str(&format!(" delay={}", fmt_effort(a.delay)));
+            }
+            if let Some(x) = a.work {
+                more.push_str(&format!(" work={}", fmt_effort(x)));
+            }
+            if a.contour != Contour::Flat {
+                more.push_str(&format!(" contour={}", a.contour.code()));
+            }
+            match a.form {
+                Form::Pct if a.units == 100 && more.is_empty() => a.name.clone(),
+                Form::Pct => format!("{}[{}%{more}]", a.name, a.units),
+                Form::Qty => format!("{}[{}]", a.name, fmt_num(a.amount)),
+                Form::Money => format!("{}[${}]", a.name, fmt_num(a.amount)),
+            }
         })
         .collect::<Vec<_>>()
         .join(",")
@@ -559,6 +779,11 @@ pub fn fmt_num(x: f64) -> String {
 /// Removes characters that would break the line-based format.
 pub fn clean(s: &str) -> String {
     s.replace(['|', '\r', '\n', ';'], " ").trim().to_string()
+}
+
+/// A custom field name: no characters that separate attributes or values.
+pub fn clean_field(s: &str) -> String {
+    s.replace(['|', '\r', '\n', ';', '=', ','], " ").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn is_hours_token(s: &str) -> bool {
@@ -624,6 +849,32 @@ impl Project {
                 "status" => p.status = if rest.is_empty() { None } else { Some(parse_date(rest).map_err(err)?) },
                 "currency" => p.currency = rest.to_string(),
                 "pool" => p.pool = (!rest.is_empty()).then(|| rest.to_string()),
+                "field" => {
+                    let f: Vec<&str> = rest.split('|').map(str::trim).collect();
+                    let name = clean_field(f[0]);
+                    if name.is_empty() {
+                        return Err(err("field needs a name".into()));
+                    }
+                    let kind = f.get(1).copied().unwrap_or("text").to_ascii_lowercase();
+                    if !FIELD_KINDS.contains(&kind.as_str()) {
+                        return Err(err(format!("field type must be text, number, date, flag or code (not '{kind}')")));
+                    }
+                    let values = f.get(2).map(|v| v.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default();
+                    p.fields.retain(|x| x.name != name);
+                    p.fields.push(FieldDef { name, kind, values });
+                }
+                "leveling" => {
+                    for tok in rest.split_whitespace() {
+                        match tok {
+                            "slack" => p.leveling.slack_only = true,
+                            "split" => p.leveling.split = true,
+                            "order=standard" => p.leveling.order = LevelOrder::Standard,
+                            "order=priority" => p.leveling.order = LevelOrder::Priority,
+                            "order=id" => p.leveling.order = LevelOrder::Id,
+                            _ => return Err(err(format!("unknown leveling option '{tok}' (slack, split, order=standard|priority|id)"))),
+                        }
+                    }
+                }
                 "dayhours" => {
                     let h: f64 = rest.parse().map_err(|_| err(format!("bad dayhours '{rest}'")))?;
                     if !(0.25..=24.0).contains(&h) {
@@ -679,7 +930,22 @@ impl Project {
                         let v = v.trim();
                         let num = |v: &str| v.parse::<f64>().map_err(|_| err(format!("bad {k} '{v}'")));
                         match k {
-                            "rate" => r.rate = num(v)?,
+                            "rate" => match v.split_once(" from ") {
+                                Some((x, d)) => r.rates.push((parse_date(d.trim()).map_err(err)?, num(x.trim())?)),
+                                None => r.rate = num(v)?,
+                            },
+                            "accrue" => {
+                                r.accrue = match v {
+                                    "start" => Accrue::Start,
+                                    "end" => Accrue::End,
+                                    "prorated" => Accrue::Prorated,
+                                    _ => return Err(err(format!("accrue must be start, end or prorated (not '{v}')"))),
+                                }
+                            }
+                            "group" => r.group = v.to_string(),
+                            "initials" => r.initials = v.to_string(),
+                            "email" => r.email = v.to_string(),
+                            "note" => r.note = v.to_string(),
                             "peruse" => r.per_use = num(v)?,
                             "overtime" => r.overtime = num(v)?,
                             "unit" => r.unit = v.to_string(),
@@ -692,9 +958,17 @@ impl Project {
                                 }
                             }
                             "capacity" => {
-                                r.capacity = v.trim_end_matches('%').parse().map_err(|_| err(format!("bad capacity '{v}'")))?;
-                                if r.capacity == 0 {
+                                let (x, from) = match v.split_once(" from ") {
+                                    Some((x, d)) => (x.trim(), Some(parse_date(d.trim()).map_err(err)?)),
+                                    None => (v, None),
+                                };
+                                let c: u32 = x.trim_end_matches('%').parse().map_err(|_| err(format!("bad capacity '{v}'")))?;
+                                if c == 0 {
                                     return Err(err("capacity must be above 0%".into()));
+                                }
+                                match from {
+                                    Some(d) => r.caps.push((d, c)),
+                                    None => r.capacity = c,
                                 }
                             }
                             "off" => r.off.extend(parse_ranges(v).map_err(err)?),
@@ -709,6 +983,8 @@ impl Project {
                         }
                     }
                     r.week = week;
+                    r.rates.sort_by_key(|x| x.0);
+                    r.caps.sort_by_key(|x| x.0);
                     p.resources.retain(|x| x.name != r.name);
                     p.resources.push(r);
                 }
@@ -730,7 +1006,7 @@ impl Project {
                     t.elapsed = elapsed;
                     t.level = indent / 2;
                     t.deps = parse_deps(get(3), p.day_minutes).map_err(err)?;
-                    t.who = parse_who(get(4)).map_err(err)?;
+                    t.who = parse_who_dm(get(4), p.day_minutes).map_err(err)?;
                     t.pct = match get(5) {
                         "" => 0,
                         s => s.trim_end_matches('%').trim().parse::<u8>().map_err(|_| err(format!("bad % done '{s}'")))?.min(100),
@@ -756,6 +1032,19 @@ impl Project {
                             "priority" => t.priority = v.parse::<u32>().map_err(|_| err(format!("bad priority '{v}'")))?.min(1000),
                             "cal" => t.cal = Some(v.to_string()),
                             "sub" => t.sub = Some(v.to_string()),
+                            "type" => match v {
+                                "units" => t.fixed_units = true,
+                                "work" | "duration" => t.fixed_units = false,
+                                _ => return Err(err(format!("task type must be units, work or duration (not '{v}')"))),
+                            },
+                            "lsplit" => t.lsplits = parse_ranges(v).map_err(err)?,
+                            x if x.starts_with("x:") => {
+                                let name = clean_field(&x[2..]);
+                                if !name.is_empty() && !v.is_empty() {
+                                    t.fields.retain(|(k, _)| *k != name);
+                                    t.fields.push((name, v.to_string()));
+                                }
+                            }
                             "ext" => {
                                 for part in v.split(',').map(str::trim).filter(|x| !x.is_empty()) {
                                     let bad = || err(format!("bad external link '{part}' (example: Other.plan#5FS+1d)"));
@@ -843,6 +1132,26 @@ impl Project {
         for r in self.resources.iter().filter(|r| !r.pooled) {
             let _ = writeln!(s, "{}", resource_line(r));
         }
+        for f in &self.fields {
+            let values = if f.values.is_empty() { String::new() } else { format!(" | {}", f.values.iter().map(|v| clean(v).replace(',', " ")).collect::<Vec<_>>().join(", ")) };
+            let _ = writeln!(s, "field {} | {}{values}", clean_field(&f.name), f.kind);
+        }
+        if self.leveling != LevelOpts::default() {
+            let l = self.leveling;
+            let mut opts = vec![];
+            if l.slack_only {
+                opts.push("slack");
+            }
+            if l.split {
+                opts.push("split");
+            }
+            match l.order {
+                LevelOrder::Standard => {}
+                LevelOrder::Priority => opts.push("order=priority"),
+                LevelOrder::Id => opts.push("order=id"),
+            }
+            let _ = writeln!(s, "leveling {}", opts.join(" "));
+        }
         let _ = writeln!(s, "# id | name | duration | predecessors | resources | % done | attributes");
         let summary = self.summary_flags();
         for (i, t) in self.tasks.iter().enumerate() {
@@ -893,6 +1202,15 @@ impl Project {
             }
             if let Some(f) = &t.sub {
                 attrs.push(format!("sub={}", clean(f)));
+            }
+            if t.fixed_units {
+                attrs.push("type=units".into());
+            }
+            if !t.lsplits.is_empty() {
+                attrs.push(format!("lsplit={}", fmt_ranges(&t.lsplits)));
+            }
+            for (k, v) in &t.fields {
+                attrs.push(format!("x:{}={}", clean_field(k), clean(v)));
             }
             if !t.xdeps.is_empty() {
                 let x: Vec<String> = t.xdeps.iter().map(|x| format!("{}#{}{}{}", clean(&x.file), x.id, if x.kind == Link::FS { "" } else { x.kind.as_str() }, fmt_lag(x.lag, false, dm))).collect();
@@ -1030,6 +1348,20 @@ pub fn resource_line(r: &Resource) -> String {
     if r.overtime != 0.0 {
         let _ = write!(line, " | overtime {}", fmt_num(r.overtime));
     }
+    for (d, x) in &r.rates {
+        let _ = write!(line, " | rate {} from {}", fmt_num(*x), fmt_date(*d));
+    }
+    for (d, x) in &r.caps {
+        let _ = write!(line, " | capacity {x} from {}", fmt_date(*d));
+    }
+    if r.accrue != Accrue::Prorated {
+        let _ = write!(line, " | accrue {}", r.accrue.code());
+    }
+    for (k, v) in [("group", &r.group), ("initials", &r.initials), ("email", &r.email), ("note", &r.note)] {
+        if !v.is_empty() {
+            let _ = write!(line, " | {k} {}", clean(v));
+        }
+    }
     if let Some(w) = &r.week {
         for g in fmt_week(w) {
             let _ = write!(line, " | week {g}");
@@ -1089,23 +1421,23 @@ task 5 | Cure | 3ed | 4+12eh | | | ext=Other.plan#7SS+1d,More.plan#2; sub=Sub.pl
         assert_eq!(p.resources[1].kind, ResKind::Material);
         assert_eq!(p.resources[2].kind, ResKind::Cost);
         let t2 = &p.tasks[1];
-        assert_eq!(t2.who[0], Assign { name: "Ana".into(), units: 50, amount: 50.0, form: Form::Pct });
+        assert_eq!(t2.who[0], Assign::person("Ana", 50));
         assert_eq!((t2.who[2].amount, t2.who[2].form), (20.0, Form::Qty));
         assert_eq!((t2.who[3].amount, t2.who[3].form), (400.0, Form::Money));
         assert_eq!((t2.work, t2.overtime, t2.actual_cost), (Some(2400), 240, Some(1200.0)));
         assert!(t2.actual_start.is_some());
         let t3 = &p.tasks[2];
-        assert_eq!(t3.deps[0], Dep { id: 2, kind: Link::SS, lag: 450, elapsed: false });
+        assert_eq!(t3.deps[0], Dep { id: 2, kind: Link::SS, lag: 450, elapsed: false, pct: None });
         assert_eq!(t3.baseline().unwrap().cost, 350.0);
         assert!(t3.baselines[3].is_some());
         assert_eq!(t3.priority, 800);
         let t4 = &p.tasks[3];
-        assert_eq!(t4.deps[0], Dep { id: 3, kind: Link::FF, lag: -30, elapsed: false });
+        assert_eq!(t4.deps[0], Dep { id: 3, kind: Link::FF, lag: -30, elapsed: false, pct: None });
         assert!(t4.inactive && t4.constraint == Constraint::Alap && t4.manual.is_some());
         assert_eq!((t4.cal.as_deref(), t4.splits.len()), (Some("Night"), 1));
         let t5 = &p.tasks[4];
         assert!(t5.elapsed && t5.dur == 3 * 1440);
-        assert_eq!(t5.deps[0], Dep { id: 4, kind: Link::FS, lag: 720, elapsed: true });
+        assert_eq!(t5.deps[0], Dep { id: 4, kind: Link::FS, lag: 720, elapsed: true, pct: None });
         assert_eq!(t5.xdeps[0], XDep { file: "Other.plan".into(), id: 7, kind: Link::SS, lag: 450 });
         assert_eq!(t5.sub.as_deref(), Some("Sub.plan"));
         assert!(matches!(t5.constraint, Constraint::Fnlt(_)));

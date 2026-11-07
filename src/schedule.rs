@@ -112,11 +112,11 @@ pub fn calendars(p: &Project) -> Result<Cals, String> {
         };
         let mut who: Vec<Resource> = t.who.iter().filter(|a| is_work(p, a)).map(|a| p.resource(&a.name)).filter(|r| r.week.is_some() || !r.off.is_empty()).collect();
         who.sort_by(|a, b| a.name.cmp(&b.name));
-        if who.is_empty() && t.splits.is_empty() && t.cal.is_none() {
+        if who.is_empty() && t.splits.is_empty() && t.lsplits.is_empty() && t.cal.is_none() {
             task.push(base.clone());
             continue;
         }
-        let key = format!("{}|{}|{:?}", t.cal.as_deref().unwrap_or(""), who.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join("\u{1}"), t.splits);
+        let key = format!("{}|{}|{:?}|{:?}", t.cal.as_deref().unwrap_or(""), who.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join("\u{1}"), t.splits, t.lsplits);
         let c = cache.entry(key).or_insert_with(|| {
             let mut c = if who.is_empty() {
                 (*start).clone()
@@ -126,7 +126,7 @@ pub fn calendars(p: &Project) -> Result<Cals, String> {
                 // People who never overlap: fall back to the first person's hours.
                 Calendar::intersect(&refs).unwrap_or_else(|| each[0].clone())
             };
-            for &(a, b) in &t.splits {
+            for &(a, b) in t.splits.iter().chain(&t.lsplits) {
                 c.block_days(a, b);
             }
             Rc::new(c)
@@ -144,6 +144,8 @@ struct LinkE {
     kind: Link,
     lag: i64,
     elapsed: bool,
+    /// Lag as a percent of the predecessor's duration.
+    pct: Option<i32>,
 }
 
 struct Graph {
@@ -206,7 +208,7 @@ fn graph(p: &Project) -> Result<Graph, String> {
             let mut targets = vec![];
             leaves(ti, &children, &mut targets);
             for to in targets {
-                links.push(LinkE { from: pi, to, kind: d.kind, lag: d.lag, elapsed: d.elapsed });
+                links.push(LinkE { from: pi, to, kind: d.kind, lag: d.lag, elapsed: d.elapsed, pct: d.pct });
             }
         }
     }
@@ -246,8 +248,36 @@ fn graph(p: &Project) -> Result<Graph, String> {
 
 // ---------- durations and costs ----------
 
-/// Effective duration: effort-driven tasks divide their work among the people on them.
+/// Effective duration: effort-driven tasks divide their work among the people on them,
+/// and a person who starts late or has their own amount of work can make it longer.
 pub fn effective_duration(p: &Project, t: &Task) -> i64 {
+    let base = base_duration(p, t);
+    if t.sub_info.is_some() {
+        return base;
+    }
+    t.who.iter().filter(|a| is_work(p, a) && a.detailed()).map(|a| a.delay + assignment_span(a, base)).fold(base_if_shared(p, t, base), i64::max)
+}
+
+/// How long one person's part lasts (not counting their delay).
+pub fn assignment_span(a: &Assign, base: i64) -> i64 {
+    match a.work {
+        Some(w) if a.units > 0 => w * 100 / a.units as i64,
+        _ => base,
+    }
+}
+
+/// The task's own duration still counts unless every person has their own work.
+fn base_if_shared(p: &Project, t: &Task, base: i64) -> i64 {
+    let people: Vec<&Assign> = t.who.iter().filter(|a| is_work(p, a)).collect();
+    if !people.is_empty() && people.iter().all(|a| a.work.is_some()) {
+        0
+    } else {
+        base
+    }
+}
+
+/// The duration before per-person details: effort-driven tasks divide their work.
+pub fn base_duration(p: &Project, t: &Task) -> i64 {
     if let Some(s) = &t.sub_info {
         return s.span;
     }
@@ -260,6 +290,65 @@ pub fn effective_duration(p: &Project, t: &Task) -> i64 {
     } else {
         work
     }
+}
+
+/// One assignment's work by day: (day, work minutes, units that day, from, to).
+/// The total is the person's work; contours shape it, delays and own work move it.
+pub fn assignment_days(tc: &Calendar, elapsed: bool, sc: &Sched, base: i64, a: &Assign) -> Vec<(i64, i64, u32, i64, i64)> {
+    if sc.ef <= sc.es {
+        return vec![];
+    }
+    let adv = |x: i64, m: i64| if elapsed { x + m } else { tc.add(x, m) };
+    let (w0, w1, total) = if a.detailed() {
+        let start = if a.delay > 0 { adv(sc.es, a.delay) } else { sc.es };
+        let span = assignment_span(a, base);
+        let end = adv(start, span).min(sc.ef);
+        (start, end, a.work.unwrap_or(span * a.units as i64 / 100))
+    } else {
+        (sc.es, sc.ef, sc.dur * a.units as i64 / 100)
+    };
+    if w1 <= w0 {
+        return vec![];
+    }
+    let mut slices = vec![];
+    for day in w0.div_euclid(DAY)..=(w1 - 1).div_euclid(DAY) {
+        let (x0, x1) = (w0.max(day * DAY), w1.min((day + 1) * DAY));
+        let m = if x1 <= x0 { 0 } else if elapsed { x1 - x0 } else { tc.work_between(x0, x1) };
+        if m > 0 {
+            slices.push((day, m, x0, x1));
+        }
+    }
+    let all: i64 = slices.iter().map(|s| s.1).sum();
+    if all == 0 {
+        return vec![];
+    }
+    let mut done = 0i64;
+    let raw: Vec<f64> = slices
+        .iter()
+        .map(|&(_, m, _, _)| {
+            let x = (done as f64 + m as f64 / 2.0) / all as f64;
+            done += m;
+            m as f64 * a.contour.weight(x)
+        })
+        .collect();
+    let sum: f64 = raw.iter().sum::<f64>().max(1e-9);
+    let mut out = Vec::with_capacity(slices.len());
+    let mut given = 0i64;
+    for (k, &(day, m, x0, x1)) in slices.iter().enumerate() {
+        // Round so the days add up exactly to the total.
+        let upto = (raw[..=k].iter().sum::<f64>() / sum * total as f64).round() as i64;
+        let mins = upto - given;
+        given = upto;
+        let units = (mins as f64 / m as f64 * 100.0).round().max(0.0) as u32;
+        out.push((day, mins, if a.contour == Contour::Flat && a.work.is_none() { a.units } else { units }, x0, x1));
+    }
+    out
+}
+
+/// The cost of one person's work, priced at the rate in force on each day.
+fn work_cost(r: &Resource, days: &[(i64, i64, u32, i64, i64)], overtime: i64) -> f64 {
+    let regular: f64 = if r.rates.is_empty() { r.rate * days.iter().map(|d| d.1).sum::<i64>() as f64 / 60.0 } else { days.iter().map(|d| r.rate_on(d.0) * d.1 as f64 / 60.0).sum() };
+    regular + r.overtime * overtime as f64 / 60.0 + r.per_use
 }
 
 /// (cost, work minutes) of a leaf task with the given effective duration.
@@ -299,6 +388,17 @@ fn run(p: &Project, cals: &Cals, g: &Graph, eff: &[i64], pins: &HashMap<usize, i
     let t0 = cal.next_work(p.start * DAY);
     let status_t = p.status.map(|d| (d + 1) * DAY);
     let mut s = vec![Sched::default(); n];
+    // A percent lag is that share of the predecessor's working time.
+    let lag_of = |l: &LinkE, s: &[Sched]| -> (i64, bool) {
+        match l.pct {
+            Some(pc) => {
+                let q = s[l.from];
+                let len = if g.summary[l.from] { cal.work_between(q.es, q.ef) } else { eff[l.from] };
+                (len * pc as i64 / 100, false)
+            }
+            None => (l.lag, l.elapsed),
+        }
+    };
 
     // Forward pass.
     for &i in &g.order {
@@ -330,11 +430,12 @@ fn run(p: &Project, cals: &Cals, g: &Graph, eff: &[i64], pins: &HashMap<usize, i
         for &k in &g.incoming[i] {
             let l = &g.links[k];
             let q = s[l.from];
+            let (lag, lel) = lag_of(l, &s);
             match l.kind {
-                Link::FS => start_b = start_b.max(shift(q.ef, l.lag, l.elapsed)),
-                Link::SS => start_b = start_b.max(shift(q.es, l.lag, l.elapsed)),
-                Link::FF => finish_b = finish_b.max(shift(q.ef, l.lag, l.elapsed)),
-                Link::SF => finish_b = finish_b.max(shift(q.es, l.lag, l.elapsed)),
+                Link::FS => start_b = start_b.max(shift(q.ef, lag, lel)),
+                Link::SS => start_b = start_b.max(shift(q.es, lag, lel)),
+                Link::FF => finish_b = finish_b.max(shift(q.ef, lag, lel)),
+                Link::SF => finish_b = finish_b.max(shift(q.es, lag, lel)),
             }
         }
         for x in &t.ext {
@@ -428,11 +529,12 @@ fn run(p: &Project, cals: &Cals, g: &Graph, eff: &[i64], pins: &HashMap<usize, i
         for &k in &g.outgoing[i] {
             let l = &g.links[k];
             let q = s[l.to];
+            let (lag, lel) = lag_of(l, &s);
             match l.kind {
-                Link::FS => lf_b = lf_b.min(unshift(q.ls, l.lag, l.elapsed)),
-                Link::SS => ls_b = ls_b.min(unshift(q.ls, l.lag, l.elapsed)),
-                Link::FF => lf_b = lf_b.min(unshift(q.lf, l.lag, l.elapsed)),
-                Link::SF => ls_b = ls_b.min(unshift(q.lf, l.lag, l.elapsed)),
+                Link::FS => lf_b = lf_b.min(unshift(q.ls, lag, lel)),
+                Link::SS => ls_b = ls_b.min(unshift(q.ls, lag, lel)),
+                Link::FF => lf_b = lf_b.min(unshift(q.lf, lag, lel)),
+                Link::SF => ls_b = ls_b.min(unshift(q.lf, lag, lel)),
             }
         }
         if let Some(d) = t.deadline {
@@ -525,7 +627,11 @@ pub fn schedule_with(p: &Project, cals: &Cals) -> Result<Schedule, String> {
         for &k in &g.outgoing[i] {
             let l = &g.links[k];
             let q = s[l.to];
-            let shift = |a: i64| if l.elapsed { a + l.lag } else if l.lag >= 0 { cal.add(a, l.lag) } else { cal.sub(a, -l.lag) };
+            let (lag, lel) = match l.pct {
+                Some(pc) => ((if g.summary[l.from] { cal.work_between(s[l.from].es, s[l.from].ef) } else { eff[l.from] }) * pc as i64 / 100, false),
+                None => (l.lag, l.elapsed),
+            };
+            let shift = |a: i64| if lel { a + lag } else if lag >= 0 { cal.add(a, lag) } else { cal.sub(a, -lag) };
             let gap = match l.kind {
                 Link::FS => cal.work_between(shift(s[i].ef), q.es),
                 Link::SS => cal.work_between(shift(s[i].es), q.es),
@@ -538,7 +644,11 @@ pub fn schedule_with(p: &Project, cals: &Cals) -> Result<Schedule, String> {
             free = cal.work_between(s[i].ef, finish);
         }
         s[i].free_slack = free.clamp(0, s[i].slack.max(0));
-        let (cost, work) = task_cost(p, t, eff[i]);
+        let (cost, work) = if t.sub_info.is_none() && t.who.iter().any(|a| a.detailed() || p.resource(&a.name).rates.len() + p.resource(&a.name).caps.len() > 0) {
+            spread_cost(p, t, &*cals.task[i], &s[i], base_duration(p, t))
+        } else {
+            task_cost(p, t, eff[i])
+        };
         s[i].span = eff[i];
         s[i].pct = if s[i].done { 100.0 } else { t.sub_info.as_ref().map_or(t.pct as f64, |x| x.pct) };
         if s[i].inactive {
@@ -634,6 +744,14 @@ pub struct Load {
     pub work: i64,
     pub cost: f64,
     pub tasks: usize,
+    /// Days whose capacity differs from `capacity` (it changes by date).
+    pub caps: BTreeMap<i64, u32>,
+}
+
+impl Load {
+    pub fn cap_on(&self, day: i64) -> u32 {
+        self.caps.get(&day).copied().unwrap_or(self.capacity)
+    }
 }
 
 fn task_minutes_on(cal: &Calendar, sc: &Sched, elapsed: bool, day: i64) -> i64 {
@@ -665,17 +783,21 @@ pub fn loads(p: &Project, s: &Schedule) -> Vec<Load> {
                 continue;
             }
             l.tasks += 1;
-            l.work += sc.dur * a.units as i64 / 100 + t.overtime;
-            l.cost += task_cost(&Project { tasks: vec![], ..p.clone_light() }, &Task { who: vec![a.clone()], cost: 0.0, overtime: t.overtime, ..Task::new(0, "", 0) }, sc.dur).0;
-            if sc.dur == 0 || sc.ef <= sc.es {
-                continue;
-            }
             let tc = &*cals.task[i];
-            for day in sc.es.div_euclid(DAY)..=(sc.ef - 1).div_euclid(DAY) {
-                let mins = task_minutes_on(tc, &sc, t.elapsed, day);
+            let days = if sc.dur == 0 { vec![] } else { assignment_days(tc, t.elapsed, &sc, base_duration(p, t), a) };
+            if a.detailed() {
+                l.work += days.iter().map(|d| d.1).sum::<i64>() + t.overtime;
+            } else {
+                l.work += sc.dur * a.units as i64 / 100 + t.overtime;
+            }
+            l.cost += if r.rates.is_empty() && !a.detailed() {
+                task_cost(&Project { tasks: vec![], ..p.clone_light() }, &Task { who: vec![a.clone()], cost: 0.0, overtime: t.overtime, ..Task::new(0, "", 0) }, sc.dur).0
+            } else {
+                work_cost(&r, &days, t.overtime)
+            };
+            for (day, mins, units, a0, b0) in days {
                 if mins > 0 {
-                    let (a0, b0) = (sc.es.max(day * DAY), sc.ef.min((day + 1) * DAY));
-                    per_day.entry(day).or_default().push((a0, b0, a.units, t.id, mins * a.units as i64 / 100));
+                    per_day.entry(day).or_default().push((a0, b0, units, t.id, mins));
                 }
             }
         }
@@ -685,7 +807,11 @@ pub fn loads(p: &Project, s: &Schedule) -> Vec<Load> {
                 let u: u32 = iv.iter().filter(|(x, y, _, _, _)| *x <= a && a < *y).map(|v| v.2).sum();
                 peak = peak.max(u);
             }
-            if peak > r.capacity {
+            let cap = r.capacity_on(day);
+            if cap != r.capacity {
+                l.caps.insert(day, cap);
+            }
+            if peak > cap {
                 l.over_days += 1;
             }
             let mut ids: Vec<u32> = iv.iter().map(|v| v.3).collect();
@@ -702,6 +828,26 @@ impl Project {
     fn clone_light(&self) -> Project {
         Project { tasks: vec![], ..self.clone_no_tasks() }
     }
+    /// Everything but the tasks, keeping all project settings.
+    fn clone_no_tasks_full(&self) -> Project {
+        Project {
+            name: self.name.clone(),
+            start: self.start,
+            status: self.status,
+            currency: self.currency.clone(),
+            week: self.week.clone(),
+            day_minutes: self.day_minutes,
+            exceptions: self.exceptions.clone(),
+            recurring: self.recurring.clone(),
+            calendars: self.calendars.clone(),
+            pool: self.pool.clone(),
+            resources: self.resources.clone(),
+            tasks: vec![],
+            fields: self.fields.clone(),
+            leveling: self.leveling,
+            warnings: vec![],
+        }
+    }
     fn clone_no_tasks(&self) -> Project {
         Project {
             name: String::new(),
@@ -716,6 +862,8 @@ impl Project {
             pool: None,
             resources: self.resources.clone(),
             tasks: vec![],
+            fields: vec![],
+            leveling: self.leveling,
             warnings: vec![],
         }
     }
@@ -733,29 +881,187 @@ pub fn task_usage(p: &Project, s: &Schedule) -> Result<Vec<Vec<(i64, i64)>>, Str
             if summary[i] || sc.inactive || sc.ef <= sc.es {
                 return vec![];
             }
-            let units: i64 = t.who.iter().filter(|a| is_work(p, a)).map(|a| a.units as i64).sum();
             let tc = &*cals.task[i];
-            (sc.es.div_euclid(DAY)..=(sc.ef - 1).div_euclid(DAY))
-                .filter_map(|d| {
-                    let m = task_minutes_on(tc, &sc, t.elapsed, d);
-                    (m > 0).then(|| (d, if units > 0 { m * units / 100 } else { m }))
-                })
+            let people: Vec<&Assign> = t.who.iter().filter(|a| is_work(p, a)).collect();
+            if people.is_empty() {
+                return (sc.es.div_euclid(DAY)..=(sc.ef - 1).div_euclid(DAY))
+                    .filter_map(|d| {
+                        let m = task_minutes_on(tc, &sc, t.elapsed, d);
+                        (m > 0).then_some((d, m))
+                    })
+                    .collect();
+            }
+            let base = base_duration(p, t);
+            let mut by_day: BTreeMap<i64, i64> = BTreeMap::new();
+            for a in people {
+                for (d, m, ..) in assignment_days(tc, t.elapsed, &sc, base, a) {
+                    *by_day.entry(d).or_default() += m;
+                }
+            }
+            by_day.into_iter().filter(|x| x.1 > 0).collect()
+        })
+        .collect())
+}
+
+/// Each person's work by day on each task: [task][assignment] → (day, minutes).
+pub fn assignment_usage(p: &Project, s: &Schedule) -> Result<Vec<Vec<(String, Vec<(i64, i64)>)>>, String> {
+    let cals = calendars(p)?;
+    let summary = p.summary_flags();
+    Ok(p.tasks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let sc = s.tasks[i];
+            if summary[i] || sc.inactive || sc.ef <= sc.es {
+                return vec![];
+            }
+            let base = base_duration(p, t);
+            t.who
+                .iter()
+                .filter(|a| is_work(p, a))
+                .map(|a| (a.name.clone(), assignment_days(&cals.task[i], t.elapsed, &sc, base, a).into_iter().filter(|d| d.1 > 0).map(|d| (d.0, d.1)).collect()))
                 .collect()
         })
         .collect())
 }
 
+/// (cost, work) of a task from each person's daily work, at the rate of each day.
+fn spread_cost(p: &Project, t: &Task, tc: &Calendar, sc: &Sched, base: i64) -> (f64, i64) {
+    let mut cost = t.cost;
+    let mut work = 0;
+    for a in &t.who {
+        let r = p.resource(&a.name);
+        match r.kind {
+            ResKind::Work => {
+                let days = assignment_days(tc, t.elapsed, sc, base, a);
+                work += days.iter().map(|d| d.1).sum::<i64>() + t.overtime;
+                cost += work_cost(&r, &days, t.overtime);
+            }
+            ResKind::Material => cost += r.rate_on(sc.es.div_euclid(DAY)) * a.amount + r.per_use,
+            ResKind::Cost => cost += a.amount,
+        }
+    }
+    (cost, work)
+}
+
+/// When each task's cost is spent, day by day: work as it's done (or all at the start or
+/// end, as each person's `accrue` says), per-use costs at the start, fixed costs spread.
+pub fn cost_days(p: &Project, s: &Schedule) -> Result<Vec<Vec<(i64, f64)>>, String> {
+    let cals = calendars(p)?;
+    let summary = p.summary_flags();
+    let mut out = vec![];
+    for (i, t) in p.tasks.iter().enumerate() {
+        let sc = s.tasks[i];
+        let mut m: BTreeMap<i64, f64> = BTreeMap::new();
+        if summary[i] || sc.inactive {
+            if summary[i] && t.cost != 0.0 {
+                *m.entry(sc.es.div_euclid(DAY)).or_default() += t.cost;
+            }
+            out.push(m.into_iter().collect());
+            continue;
+        }
+        let tc = &*cals.task[i];
+        let (d0, d1) = (sc.es.div_euclid(DAY), (sc.ef - 1).max(sc.es).div_euclid(DAY));
+        let work_days: Vec<i64> = (d0..=d1).filter(|&d| sc.ef <= sc.es || task_minutes_on(tc, &sc, t.elapsed, d) > 0).collect();
+        let work_days = if work_days.is_empty() { vec![d0] } else { work_days };
+        let spread = |m: &mut BTreeMap<i64, f64>, v: f64| {
+            for d in &work_days {
+                *m.entry(*d).or_default() += v / work_days.len() as f64;
+            }
+        };
+        spread(&mut m, t.cost);
+        if let Some(info) = &t.sub_info {
+            spread(&mut m, info.cost);
+        }
+        let base = base_duration(p, t);
+        for a in &t.who {
+            let r = p.resource(&a.name);
+            let (total, days): (f64, Vec<(i64, f64)>) = match r.kind {
+                ResKind::Work => {
+                    let days = assignment_days(tc, t.elapsed, &sc, base, a);
+                    *m.entry(days.first().map_or(d0, |d| d.0)).or_default() += r.per_use;
+                    let ot = r.overtime * t.overtime as f64 / 60.0;
+                    let per: Vec<(i64, f64)> = days.iter().map(|d| (d.0, r.rate_on(d.0) * d.1 as f64 / 60.0)).collect();
+                    let tot = per.iter().map(|x| x.1).sum::<f64>() + ot;
+                    if let Some(last) = per.last().map(|x| x.0) {
+                        *m.entry(last).or_default() += ot;
+                    }
+                    (tot, per)
+                }
+                ResKind::Material => {
+                    *m.entry(d0).or_default() += r.per_use;
+                    let v = r.rate_on(d0) * a.amount;
+                    (v, work_days.iter().map(|d| (*d, v / work_days.len() as f64)).collect())
+                }
+                ResKind::Cost => (a.amount, work_days.iter().map(|d| (*d, a.amount / work_days.len() as f64)).collect()),
+            };
+            match r.accrue {
+                Accrue::Prorated => {
+                    for (d, v) in days {
+                        *m.entry(d).or_default() += v;
+                    }
+                }
+                Accrue::Start => *m.entry(days.first().map_or(d0, |x| x.0)).or_default() += total,
+                Accrue::End => *m.entry(days.last().map_or(d1, |x| x.0)).or_default() += total,
+            }
+        }
+        out.push(m.into_iter().filter(|x| x.1.abs() > 1e-9).collect());
+    }
+    Ok(out)
+}
+
+/// Sets progress as if work went to plan up to the status date: tasks that should be
+/// finished get their actual start and finish, tasks under way get their actual start
+/// and the share of their work that falls before the status date. Returns how many changed.
+pub fn update_progress(p: &mut Project) -> Result<usize, String> {
+    let st = p.status.ok_or("set a status date first")?;
+    let st_t = (st + 1) * DAY;
+    let cals = calendars(p)?;
+    // The plan as it was meant to go: without pushing unstarted work past the status date.
+    let plan = Project { status: None, tasks: p.tasks.clone(), ..p.clone_no_tasks_full() };
+    let s = schedule_with(&plan, &cals)?;
+    let summary = p.summary_flags();
+    let mut n = 0;
+    for (i, t) in p.tasks.iter_mut().enumerate() {
+        let sc = s.tasks[i];
+        if summary[i] || sc.inactive || sc.done || t.sub.is_some() || sc.es >= st_t {
+            continue;
+        }
+        let before = (t.actual_start, t.actual_finish, t.pct);
+        if sc.ef <= st_t {
+            t.actual_start.get_or_insert(sc.es);
+            t.actual_finish = Some(sc.ef);
+            t.pct = 100;
+        } else {
+            t.actual_start.get_or_insert(sc.es);
+            let tc = &*cals.task[i];
+            let (done, all) = if t.elapsed { (st_t - sc.es, sc.ef - sc.es) } else { (tc.work_between(sc.es, st_t), tc.work_between(sc.es, sc.ef)) };
+            let pct = (done * 100 / all.max(1)).clamp(1, 99) as u8;
+            t.pct = t.pct.max(pct);
+        }
+        if before != (t.actual_start, t.actual_finish, t.pct) {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 /// Delays tasks until nobody is booked beyond their capacity. Lower-priority work
-/// moves first; among equals, whatever moves the finish least. Returns (task id, delay).
+/// moves first; among equals, whatever moves the finish least (see `LevelOpts` for the
+/// other orders, for staying within slack, and for pausing work that's under way).
+/// Returns (task id, delay).
 pub fn level(p: &mut Project) -> Result<Vec<(u32, i64)>, String> {
     for t in &mut p.tasks {
         t.delay = 0;
+        t.lsplits.clear();
     }
+    let opts = p.leveling;
     let summary = p.summary_flags();
     let people: Vec<Resource> = p.all_resources().into_iter().filter(|r| r.kind == ResKind::Work).collect();
     let mut ignored: HashSet<(i64, String)> = HashSet::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let cals = calendars(p)?;
+    let mut cals = calendars(p)?;
+    let finish0 = schedule_with(p, &cals)?.finish;
     for _ in 0..5000 {
         if std::time::Instant::now() > deadline {
             break;
@@ -780,9 +1086,10 @@ pub fn level(p: &mut Project) -> Result<Vec<(u32, i64)>, String> {
                 if ignored.contains(&(at, r.name.clone())) {
                     continue;
                 }
-                let active: Vec<(usize, u32)> = mine.iter().copied().filter(|(i, _)| s.tasks[*i].es <= at && at < s.tasks[*i].ef).collect();
+                // Only tasks actually working at that moment (not paused around it).
+                let active: Vec<(usize, u32)> = mine.iter().copied().filter(|(i, _)| s.tasks[*i].es <= at && at < s.tasks[*i].ef && (p.tasks[*i].elapsed || cals.task[*i].next_work(at) == at)).collect();
                 let used: u32 = active.iter().map(|a| a.1).sum();
-                if active.len() >= 2 && used > r.capacity {
+                if active.len() >= 2 && used > r.capacity_on(at.div_euclid(DAY)) {
                     found = Some((at, r.name.clone(), active));
                     break;
                 }
@@ -791,39 +1098,71 @@ pub fn level(p: &mut Project) -> Result<Vec<(u32, i64)>, String> {
         let Some((at, who, mut active)) = found else { break };
         let fixed = |i: usize| {
             let t = &p.tasks[i];
-            matches!(t.constraint, Constraint::Mso(_) | Constraint::Mfo(_)) || t.manual.is_some() || s.tasks[i].started
+            matches!(t.constraint, Constraint::Mso(_) | Constraint::Mfo(_)) || t.manual.is_some() || (s.tasks[i].started && !opts.split)
         };
         active.retain(|&(i, _)| !fixed(i));
-        let min_priority = active.iter().map(|&(i, _)| p.tasks[i].priority).min();
-        active.retain(|&(i, _)| Some(p.tasks[i].priority) == min_priority);
-        active.sort_by_key(|&(i, _)| (std::cmp::Reverse(s.tasks[i].slack), std::cmp::Reverse(s.tasks[i].es), std::cmp::Reverse(p.tasks[i].id)));
-        let mut best: Option<(i64, usize, i64)> = None;
+        if opts.order != LevelOrder::Id {
+            let min_priority = active.iter().map(|&(i, _)| p.tasks[i].priority).min();
+            active.retain(|&(i, _)| Some(p.tasks[i].priority) == min_priority);
+        }
+        match opts.order {
+            LevelOrder::Standard => active.sort_by_key(|&(i, _)| (std::cmp::Reverse(s.tasks[i].slack), std::cmp::Reverse(s.tasks[i].es), std::cmp::Reverse(p.tasks[i].id))),
+            // Priority / id order: the later task (by id) is the one that moves.
+            LevelOrder::Priority | LevelOrder::Id => {
+                active.sort_by_key(|&(i, _)| std::cmp::Reverse(p.tasks[i].id));
+                active.truncate(1);
+            }
+        }
+        // Candidates: delay the task, or (if allowed) pause it while the clash lasts.
+        let mut best: Option<(i64, usize, i64, Option<(i64, i64)>)> = None;
         let all_now: Vec<usize> = p.tasks.iter().enumerate().filter(|(i, t)| !summary[*i] && t.who.iter().any(|a| a.name == who) && s.tasks[*i].es <= at && at < s.tasks[*i].ef).map(|(i, _)| i).collect();
         for &(v, _) in &active {
             let target = all_now.iter().filter(|&&k| k != v).map(|&k| s.tasks[k].ef).filter(|&e| e > s.tasks[v].es).min();
             let Some(target) = target else { continue };
-            let add = cals.task[v].work_between(s.tasks[v].es, target).max(1);
-            p.tasks[v].delay += add;
-            let finish = schedule_with(p, &cals).map(|x| x.finish).unwrap_or(i64::MAX);
-            p.tasks[v].delay -= add;
-            if best.is_none_or(|b| finish < b.0) {
-                best = Some((finish, v, add));
+            if !s.tasks[v].started {
+                let add = cals.task[v].work_between(s.tasks[v].es, target).max(1);
+                p.tasks[v].delay += add;
+                let finish = schedule_with(p, &cals).map(|x| x.finish).unwrap_or(i64::MAX);
+                p.tasks[v].delay -= add;
+                if best.is_none_or(|b| finish < b.0) {
+                    best = Some((finish, v, add, None));
+                }
+            }
+            if opts.split && s.tasks[v].es < at && at.div_euclid(DAY) > s.tasks[v].es.div_euclid(DAY) {
+                let pause = (at.div_euclid(DAY), ((target - 1).div_euclid(DAY)).max(at.div_euclid(DAY)));
+                if p.tasks[v].lsplits.contains(&pause) {
+                    continue;
+                }
+                p.tasks[v].lsplits.push(pause);
+                let finish = calendars(p).and_then(|c| schedule_with(p, &c)).map(|x| x.finish).unwrap_or(i64::MAX);
+                p.tasks[v].lsplits.pop();
+                if best.is_none_or(|b| finish < b.0) {
+                    best = Some((finish, v, 0, Some(pause)));
+                }
             }
         }
+        if opts.slack_only && best.is_some_and(|b| b.0 > finish0) {
+            best = None;
+        }
         match best {
-            Some((_, v, add)) => p.tasks[v].delay += add,
+            Some((_, v, _, Some(pause))) => {
+                p.tasks[v].lsplits.push(pause);
+                cals = calendars(p)?;
+            }
+            Some((_, v, add, None)) => p.tasks[v].delay += add,
             None => {
                 ignored.insert((at, who));
             }
         }
     }
-    Ok(p.tasks.iter().filter(|t| t.delay > 0).map(|t| (t.id, t.delay)).collect())
+    Ok(p.tasks.iter().filter(|t| t.delay > 0 || !t.lsplits.is_empty()).map(|t| (t.id, t.delay)).collect())
 }
 
 pub fn clear_leveling(p: &mut Project) -> usize {
-    let n = p.tasks.iter().filter(|t| t.delay > 0).count();
+    let n = p.tasks.iter().filter(|t| t.delay > 0 || !t.lsplits.is_empty()).count();
     for t in &mut p.tasks {
         t.delay = 0;
+        t.lsplits.clear();
     }
     n
 }
@@ -1070,5 +1409,108 @@ task 4 | Free | 1d";
         assert!(q.tasks[3].baselines[4].is_some() && q.tasks[3].baseline().unwrap().cost > 0.0);
         clear_baseline(&mut p, 0);
         assert!(p.tasks.iter().all(|t| t.baseline().is_none()));
+    }
+
+    #[test]
+    fn percent_lags_and_months() {
+        // B starts when half of A is done; C waits half of A's length after it.
+        let (p, s) = sched("project L\nstart 2026-11-09\ntask 1 | A | 4d\ntask 2 | B | 1d | 1SS+50%\ntask 3 | C | 1d | 1FS+50%\ntask 4 | D | 1mo\n");
+        assert_eq!(dt(at(&p, &s, 2).es), "2026-11-11T08:00");
+        assert_eq!(dt(at(&p, &s, 3).es), "2026-11-17T08:00");
+        assert_eq!(at(&p, &s, 4).dur, 20 * D);
+        assert!(p.serialize().contains("task 2 | B | 1d | 1SS+50%"), "{}", p.serialize());
+        assert!(p.serialize().contains("task 3 | C | 1d | 1FS+50%"));
+    }
+
+    #[test]
+    fn people_with_their_own_delay_work_and_contour() {
+        let text = "project A\nstart 2026-11-09\nresource Ana | rate 100\nresource Bo | rate 50\ntask 1 | Build | 4d | | Ana[100% delay=1d], Bo[50% work=8h contour=back] | 0\n";
+        let (p, s) = sched(text);
+        let t = at(&p, &s, 1);
+        // Ana starts a day late and still does 4 days: the task takes 5.
+        assert_eq!(t.dur, 5 * D);
+        assert_eq!(dt(t.ef), "2026-11-13T17:00");
+        let ls = loads(&p, &s);
+        let ana = ls.iter().find(|l| l.name == "Ana").unwrap();
+        assert!(!ana.days.contains_key(&parse_date("2026-11-09").unwrap()), "Ana doesn't work on day 1");
+        assert_eq!(ana.work, 4 * D);
+        let bo = ls.iter().find(|l| l.name == "Bo").unwrap();
+        assert_eq!(bo.work, 8 * 60, "Bo's own 8h");
+        let days: Vec<i64> = bo.days.values().map(|v| v.1).collect();
+        assert_eq!(days.iter().sum::<i64>(), 480);
+        assert!(days.first() < days.last(), "back-loaded: {days:?}");
+        // Cost: Ana 32h × 100 + Bo 8h × 50.
+        assert_eq!(t.cost, 3200.0 + 400.0);
+        // Written back the same way.
+        assert!(p.serialize().contains("Ana[100% delay=8h],Bo[50% work=8h contour=back]"), "{}", p.serialize());
+        let again = Project::parse(&p.serialize()).unwrap();
+        assert_eq!(again.tasks[0].who, p.tasks[0].who);
+    }
+
+    #[test]
+    fn rates_and_capacity_change_by_date_and_costs_accrue() {
+        let text = "project R\nstart 2026-11-09\nresource Ana | rate 100 | rate 200 from 2026-11-11 | capacity 100 | capacity 50 from 2026-11-12 | accrue end\ntask 1 | A | 4d | | Ana | 0\n";
+        let (p, s) = sched(text);
+        // Mon–Tue at 100, Wed–Thu at 200.
+        assert_eq!(at(&p, &s, 1).cost, 16.0 * 100.0 + 16.0 * 200.0);
+        let l = &loads(&p, &s)[0];
+        assert_eq!(l.over_days, 1, "full time on Thursday is over the 50% she has from then");
+        let c = &cost_days(&p, &s).unwrap()[0];
+        assert_eq!(c.len(), 1, "accrued at the end: {c:?}");
+        assert_eq!(c[0], (parse_date("2026-11-12").unwrap(), 4800.0));
+        let r = Project::parse(&p.serialize()).unwrap().resources[0].clone();
+        assert_eq!(r, p.resources[0]);
+    }
+
+    #[test]
+    fn update_progress_to_the_status_date() {
+        let mut p = Project::parse("project U\nstart 2026-11-09\nstatus 2026-11-11\ntask 1 | A | 2d\ntask 2 | B | 4d | 1\ntask 3 | C | 2d | 2\n").unwrap();
+        assert_eq!(update_progress(&mut p).unwrap(), 2);
+        assert_eq!((p.tasks[0].pct, p.tasks[0].actual_finish.map(fmt_datetime)), (100, Some("2026-11-10T17:00".into())));
+        assert_eq!(p.tasks[1].pct, 25, "one of B's four days is before the status date");
+        assert_eq!(p.tasks[1].actual_start.map(fmt_datetime), Some("2026-11-11T08:00".into()));
+        assert_eq!(p.tasks[2].pct, 0);
+        assert_eq!(update_progress(&mut p).unwrap(), 0, "nothing more to do");
+    }
+
+    #[test]
+    fn leveling_options() {
+        let text = "project V\nstart 2026-11-09\ntask 1 | A | 2d | | Ana | 0\ntask 2 | B | 2d | | Ana | 0\ntask 3 | Long | 6d\n";
+        // By id: the later task (2) moves.
+        let mut p = Project::parse(&format!("{text}leveling order=id\n")).unwrap();
+        level(&mut p).unwrap();
+        assert!(p.tasks[1].delay > 0 && p.tasks[0].delay == 0);
+        assert!(p.serialize().contains("leveling order=id"));
+        // Within slack only: there's room (Long takes 6 days), so it still levels.
+        let mut p = Project::parse(&format!("{text}leveling slack\n")).unwrap();
+        let f0 = schedule(&p).unwrap().finish;
+        level(&mut p).unwrap();
+        assert!(p.tasks.iter().any(|t| t.delay > 0));
+        assert_eq!(schedule(&p).unwrap().finish, f0);
+        // No room at all: nothing moves.
+        let mut p = Project::parse("project V\nstart 2026-11-09\nleveling slack\ntask 1 | A | 2d | | Ana | 0\ntask 2 | B | 2d | | Ana | 0\n").unwrap();
+        level(&mut p).unwrap();
+        assert!(p.tasks.iter().all(|t| t.delay == 0));
+        // Splitting: a long task under way pauses for a short urgent one.
+        let mut p = Project::parse("project S\nstart 2026-11-09\nleveling split\ntask 1 | Long | 5d | | Ana | 0\ntask 2 | Urgent | 1d | | Ana | 0 | snet=2026-11-11; priority=900\n").unwrap();
+        level(&mut p).unwrap();
+        assert_eq!(p.tasks[0].lsplits, vec![(parse_date("2026-11-11").unwrap(), parse_date("2026-11-11").unwrap())], "{:?}", p.tasks[0]);
+        assert!(p.serialize().contains("lsplit=2026-11-11"));
+        clear_leveling(&mut p);
+        assert!(p.tasks[0].lsplits.is_empty());
+    }
+
+    #[test]
+    fn custom_fields_people_details_and_fixed_units_round_trip() {
+        let text = "project F\nstart 2026-11-09\nresource Ana | rate 10 | group Eng/Backend | initials AG | email ana@example.com | note Lead\nfield Region | text\nfield Dept | code | Eng, Eng.Backend, Sales\ntask 1 | A | 2d | | Ana | 0 | work=16h; type=units; x:Region=North; x:Dept=Eng.Backend\n";
+        let p = Project::parse(text).unwrap();
+        assert_eq!(p.fields.len(), 2);
+        assert_eq!(p.fields[1].values, vec!["Eng", "Eng.Backend", "Sales"]);
+        assert_eq!(p.tasks[0].field("Dept"), Some("Eng.Backend"));
+        assert!(p.tasks[0].fixed_units);
+        assert_eq!(p.resources[0].group, "Eng/Backend");
+        let again = Project::parse(&p.serialize()).unwrap();
+        assert_eq!(again.serialize(), p.serialize());
+        assert_eq!(again.tasks[0], p.tasks[0]);
     }
 }

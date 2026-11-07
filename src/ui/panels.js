@@ -31,14 +31,18 @@ function inspector() {
   const deps = t.deps.map((d, k) => `<div class="deprow">
       <select data-insp="dep-id" data-k="${k}">${(others.some(o => o.id === d.id) ? others : [task(d.id) || { id: d.id, name: '?' }, ...others]).map(o => `<option value="${o.id}" ${o.id === d.id ? 'selected' : ''}>#${o.id} ${esc(o.name)}</option>`).join('')}</select>
       <select data-insp="dep-kind" data-k="${k}" title="${esc(K[d.kind])}">${Object.keys(K).map(kd => `<option value="${kd}" ${kd === d.kind ? 'selected' : ''} title="${esc(K[kd])}">${kd}</option>`).join('')}</select>
-      <input data-insp="dep-lag" data-k="${k}" value="${lagStr(d)}" placeholder="${T('lag')}" title="${esc(T('Lag (+2d), lead (-4h) or calendar time (+12eh)'))}">
+      <input data-insp="dep-lag" data-k="${k}" value="${lagStr(d)}" placeholder="${T('lag')}" title="${esc(T('Lag (+2d), lead (-4h), calendar time (+12eh) or a share of the predecessor (+50%)'))}">
       <button class="rm" data-act="dep-rm" data-k="${k}" title="${T('Remove link')}">×</button></div>`).join('');
   const xdeps = t.xdeps.map((x, k) => `<div class="deprow" style="grid-template-columns:1fr 26px"><span class="mut" title="${esc(t.ext[k]?.label || '')}">🔗 ${esc(x.file)} #${x.id}${x.kind !== 'FS' ? ' ' + x.kind : ''}${x.lag ? ' ' + (x.lag > 0 ? '+' : '-') + fmtDur(Math.abs(x.lag)) : ''}${t.ext[k] ? ' · ' + esc(when(t.ext[k].ef, true)) : ' · ⚠'}</span><button class="rm" data-act="xdep-rm" data-k="${k}">×</button></div>`).join('');
   const who = t.who.map((a, k) => {
     const r = resOf(a.name), kind = r?.kind || 'work';
     const val = kind === 'material' ? num(a.amount) : kind === 'cost' ? num(a.amount) : a.units + '%';
     const unit = kind === 'material' ? (r.unit || T('units')) : kind === 'cost' ? D.currency : '';
-    return `<div class="whorow"><input data-insp="who-name" data-k="${k}" value="${esc(a.name)}" list="dl-people"><input data-insp="who-amt" data-k="${k}" value="${esc(val)}" title="${esc(kind === 'work' ? T('Share of their time') : kind === 'material' ? T('Quantity ({0})', unit) : T('Amount ({0})', unit))}"><button class="rm" data-act="who-rm" data-k="${k}" title="${T('Unassign')}">×</button></div>`;
+    const more = kind === 'work' ? `<div class="whomore">
+      <label title="${esc(T('Working time after the task starts before they start'))}">${T('Starts after')}<input data-insp="who-delay" data-k="${k}" value="${a.delay ? fmtDur(a.delay) : ''}" placeholder="0"></label>
+      <label title="${esc(T('Their own hours on this task (their part lasts hours ÷ units)'))}">${T('Own work')}<input data-insp="who-work" data-k="${k}" value="${a.work != null ? fmtHours(a.work) : ''}" placeholder="${T('as the task')}"></label>
+      <label title="${esc(T('How their hours are spread over their part'))}">${T('Contour')}<select data-insp="who-contour" data-k="${k}">${CONTOURS.map(c => `<option value="${c}" ${(a.contour || 'flat') === c ? 'selected' : ''}>${CONTOUR_LABEL()[c]}</option>`).join('')}</select></label></div>` : '';
+    return `<div class="whorow"><input data-insp="who-name" data-k="${k}" value="${esc(a.name)}" list="dl-people"><input data-insp="who-amt" data-k="${k}" value="${esc(val)}" title="${esc(kind === 'work' ? T('Share of their time') : kind === 'material' ? T('Quantity ({0})', unit) : T('Amount ({0})', unit))}"><button class="rm" data-act="who-rm" data-k="${k}" title="${T('Unassign')}">×</button></div>${more}`;
   }).join('');
   const ctype = t.constraint ? t.constraint.type : 'asap';
   const cons = [['asap', T('As soon as possible')], ['alap', T('As late as possible')], ['snet', T('Start no earlier than')], ['snlt', T('Start no later than')], ['fnet', T('Finish no earlier than')], ['fnlt', T('Finish no later than')], ['mso', T('Must start on')], ['mfo', T('Must finish on')]];
@@ -57,9 +61,10 @@ function inspector() {
     <input class="iname" data-insp="name" value="${esc(t.name)}" aria-label="${T('Task name')}">
     <div class="chips">${chips}</div>
     <div class="isec"><div class="g2">
-      <label class="fl">${T('Duration')}<input data-insp="dur" value="${t.summary ? fmtDays(t.span) : fmtDur(t.edur, t.elapsed)}" ${t.summary || t.sub || t.work != null ? 'disabled' : ''} title="3d, 4h, 30m, 2w, 3ed — 0 = ${T('milestone')}"></label>
+      <label class="fl">${T('Duration')}<input data-insp="dur" value="${t.summary ? fmtDays(t.span) : fmtDur(t.edur, t.elapsed)}" ${t.summary || t.sub || (t.work != null && !t.fixedUnits) ? 'disabled' : ''} title="3d, 4h, 30m, 2w, 3ed — 0 = ${T('milestone')}"></label>
       <label class="fl">${T('Work (effort)')}<input data-insp="work" value="${t.work != null ? fmtHours(t.work) : ''}" placeholder="${t.workT ? fmtHours(t.workT) : T('fixed duration')}" ${leaf && !t.sub ? '' : 'disabled'} title="${esc(T('Set total effort (e.g. 40h) to make the task effort-driven: more people → shorter. Empty = fixed duration.'))}"></label>
       <label class="fl">${T('% done')}<input data-insp="pct" value="${Math.round(t.summary ? t.pctR : t.pct)}%" ${t.summary || t.sub ? 'disabled' : ''}></label>
+      ${leaf && !t.sub ? `<label class="fl">${T('Task type')}<select data-insp="ttype" title="${esc(T('What stays fixed when you change the duration, the work or the people'))}">${[['duration', T('Fixed duration')], ['units', T('Fixed units')], ['work', T('Fixed work (effort-driven)')]].map(([v, l]) => `<option value="${v}" ${(t.work == null ? 'duration' : t.fixedUnits ? 'units' : 'work') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>` : '<div></div>'}
       <label class="fl chk"><input type="checkbox" data-insp="elapsed" ${t.elapsed ? 'checked' : ''} ${leaf ? '' : 'disabled'}> ${T('Calendar time (nights & weekends count)')}</label>
       <div class="ro2"><span>${T('Start')}</span><b>${esc(when(t.es))}</b></div><div class="ro2"><span>${T('Finish')}</span><b class="${t.late ? 'r' : ''}">${esc(t.ef > t.es ? when(t.ef, true) : when(t.es))}</b></div>
       <div class="ro2"><span>${T('Latest start')}</span><b>${esc(when(t.ls))}</b></div><div class="ro2"><span>${T('Slack / free slack')}</span><b class="${t.slack <= 0 && !t.done ? 'r' : ''}">${t.done ? '—' : fmtDays(t.slack) + ' / ' + fmtDays(t.free)}</b></div>
@@ -87,7 +92,15 @@ function inspector() {
       ${t.manual != null ? `<label class="fl">${T('Manual start')}<input type="datetime-local" data-insp="manual-at" value="${dtLocal(t.manual)}"></label>` : '<div></div>'}
       <label class="fl chk"><input type="checkbox" data-insp="inactive" ${t.inactive ? 'checked' : ''}> ${T('Inactive (keep it, but ignore it)')}</label>
     </div>${t.conflict ? `<div class="warnbox">${T('This date constraint can\'t be met with the current links.')}</div>` : ''}${t.late ? `<div class="warnbox">${T('Finishes {0}, after the deadline ({1}).', esc(when(t.ef, true)), nice(t.deadline))}</div>` : ''}</div>
-    ${leaf ? `<div class="isec"><h5>${T('Pauses')} <button class="btn sm" data-act="split-add">+ ${T('Pause')}</button></h5>${splits || `<span class="hint">${T('Split the task around days it should not be worked on.')}</span>`}</div>` : ''}
+    ${D.fields.length ? `<div class="isec"><h5>${T('Custom fields')}</h5><div class="g2">${D.fields.map(f => {
+      const v = t.x[f.name] || '', a = `data-insp="xf" data-name="${esc(f.name)}"`;
+      const input = f.kind === 'flag' ? `<label class="fl chk"><input type="checkbox" ${a} ${v === 'yes' ? 'checked' : ''}> ${esc(f.name)}</label>`
+        : f.kind === 'date' ? `<label class="fl">${esc(f.name)}<input type="date" ${a} value="${esc(v)}"></label>`
+        : f.values.length ? `<label class="fl">${esc(f.name)}<select ${a}><option value=""></option>${f.values.map(x => `<option ${x === v ? 'selected' : ''} value="${esc(x)}">${esc('\u00a0\u00a0'.repeat((x.match(/\./g) || []).length) + x)}</option>`).join('')}</select></label>`
+        : `<label class="fl">${esc(f.name)}<input ${a} value="${esc(v)}" ${f.kind === 'number' ? 'inputmode="decimal"' : ''}></label>`;
+      return input;
+    }).join('')}</div></div>` : ''}
+    ${leaf ? `<div class="isec"><h5>${T('Pauses')} <button class="btn sm" data-act="split-add">+ ${T('Pause')}</button></h5>${splits || `<span class="hint">${T('Split the task around days it should not be worked on.')}</span>`}${t.lsplits.length ? `<span class="hint">⏸ ${T('Paused by leveling: {0}', t.lsplits.map(([a, b]) => a === b ? nice(a) : nice(a) + ' – ' + nice(b)).join(', '))}</span>` : ''}</div>` : ''}
     ${leaf ? `<div class="isec"><h5>${T('Sub-project')}</h5><label class="fl">${T('This task stands for another project file')}<select data-insp="sub"><option value="">${T('— none —')}</option>${subOpts.map(f => `<option ${t.sub === f ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select></label>
       ${t.subInfo ? `<span class="hint">📁 ${esc(t.subInfo.name)} · ${T('{0} task(s)', t.subInfo.tasks)} · ${fmtDays(t.subInfo.span)} · ${money(t.subInfo.cost)} · ${Math.round(t.subInfo.pct)}%</span><div class="btnrow"><button class="btn sm" data-act="open-sub">${T('Open it')}</button></div>` : t.sub ? `<div class="warnbox">${T('Couldn\'t read that file.')}</div>` : ''}</div>` : ''}
     <div class="isec"><h5>${T('Cost')}</h5><div class="g2"><label class="fl">${T('Fixed cost')} (${esc(D.currency)})<input data-insp="fixed" value="${t.fixed || ''}" placeholder="0"></label><div class="ro2"><span>${T('Total (with resources)')}</span><b>${money(t.cost)}</b></div></div></div>
@@ -158,10 +171,23 @@ function renderDialog() {
   }
   if (dlgKind === 'reshours') {
     const r = resOf(dlgArg); if (!r) { d.close(); return; }
-    const w = r.week || D.week;
-    d.innerHTML = dlgHead(T('{0}: working hours', esc(r.name))) + `<div class="db"><h4>${T('Personal working week')}</h4>${weekEditor(w, 'rh')}
+    const w = r.week || D.week, work = r.kind === 'work', nm = esc(r.name);
+    const tbl = (rows, kind, unit) => rows.map(([day, v], k) => `<div class="exrow" style="grid-template-columns:auto 150px 120px 26px"><span class="mut">${T('From')}</span><input type="date" data-res="${kind}-at" data-k="${k}" data-name="${nm}" value="${dateStr(day)}"><input data-res="${kind}-v" data-k="${k}" data-name="${nm}" value="${kind === 'cap' ? v + '%' : num(v)}" title="${esc(unit)}"><button class="rm" data-act="${kind}-rm" data-k="${k}">×</button></div>`).join('');
+    d.innerHTML = dlgHead(T('{0}: details', nm)) + `<div class="db">
+      <h4>${T('About')}</h4><div class="inl">
+        <label>${T('Group')} <input data-res="group" data-name="${nm}" value="${esc(r.group)}" placeholder="${T('e.g. Engineering/Backend')}" style="width:190px!important"></label>
+        <label>${T('Initials')} <input data-res="initials" data-name="${nm}" value="${esc(r.initials)}" style="width:60px!important"></label>
+        <label>${T('Email')} <input data-res="email" data-name="${nm}" value="${esc(r.email)}" type="email" style="width:210px!important"></label></div>
+      <label class="fl" style="margin-top:6px">${T('Notes')}<input class="wide" data-res="note" data-name="${nm}" value="${esc(r.note)}"></label>
+      <span class="hint">${T('Groups make the resource breakdown (RBS) chart in People; use / for sub-groups.')}</span>
+      <h4>${T('Cost')}</h4><div class="inl"><label>${T('Cost counts')} <select data-res="accrue" data-name="${nm}">${[['prorated', T('as the work is done')], ['start', T('at the start')], ['end', T('at the end')]].map(([v, l]) => `<option value="${v}" ${r.accrue === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+      <h4>${T('Rate changes')} <button class="btn sm" data-act="rate-add">+ ${T('New rate from a date')}</button></h4>
+      ${tbl(r.rates, 'rate', work ? T('Cost per hour ({0})', D.currency) : T('Cost per unit')) || `<div class="mut">${T('{0} per hour until a change is added here.', money(r.rate))}</div>`}
+      ${work ? `<h4>${T('Capacity changes')} <button class="btn sm" data-act="cap-add">+ ${T('New capacity from a date')}</button></h4>
+      ${tbl(r.caps, 'cap', '%') || `<div class="mut">${T('{0}% all the time.', r.capacity)}</div>`}
+      <h4>${T('Personal working week')}</h4>${weekEditor(w, 'rh')}
       <div class="presets"><button class="btn sm" data-act="rh-reset">${T('Use the project hours')}</button><span class="mut">${r.week ? T('Custom hours') : T('Following the project calendar')}</span></div>
-      <span class="hint">${T('Tasks with several people only run when all of them are working.')}</span></div>`;
+      <span class="hint">${T('Tasks with several people only run when all of them are working.')}</span>` : ''}</div>`;
     return;
   }
   if (dlgKind !== 'calendar') return;
@@ -204,6 +230,8 @@ function renderDialog() {
     ${rec || `<div class="mut">${T('None yet. Add your country\'s public holidays, or a date like 12-25 that repeats every year.')}</div>`}
     <h4>${T('Holidays & exceptions')}<button class="btn sm" data-act="ex-add" data-p="off">+ ${T('Day off / holiday')}</button><button class="btn sm" data-act="ex-add" data-p="work">+ ${T('Extra working day')}</button></h4>
     ${ex || `<div class="mut">${T('No dated exceptions.')}</div>`}
+    <h4>${T('Custom fields & outline codes')}<button class="btn sm" data-act="fld-add">+ ${T('Field')}</button></h4>
+    ${D.fields.map((f, k) => `<div class="exrow" style="grid-template-columns:170px 120px 1fr 26px"><input data-cal="fld-name" data-k="${k}" value="${esc(f.name)}" placeholder="${T('Name')}"><select data-cal="fld-kind" data-k="${k}">${[['text', T('Text')], ['number', T('Number')], ['date', T('Date')], ['flag', T('Yes / no')], ['code', T('Outline code')]].map(([v, l]) => `<option value="${v}" ${f.kind === v ? 'selected' : ''}>${l}</option>`).join('')}</select><input data-cal="fld-values" data-k="${k}" value="${esc(f.values.join(', '))}" placeholder="${f.kind === 'code' ? T('Codes: Eng, Eng.Backend, Sales') : T('Allowed values (optional)')}" ${f.kind === 'flag' || f.kind === 'date' ? 'disabled' : ''}><button class="rm" data-act="fld-rm" data-k="${k}">×</button></div>`).join('') || `<div class="mut">${T('Add your own columns, like a region, a budget code or an approval flag. Outline codes are levels separated by dots (Eng.Backend).')}</div>`}
     <h4>${T('Other calendars')}<button class="btn sm" data-act="ncal-add">+ ${T('Calendar')}</button></h4>
     ${cals || `<div class="mut">${T('Make a calendar (e.g. a night shift) and pick it in a task\'s details.')}</div>`}
     <h4>${T('Preview')} <span style="text-transform:none;letter-spacing:0;font-weight:400">— ${T('click a day to toggle it')}</span></h4><div class="months4">${months}</div>

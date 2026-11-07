@@ -97,7 +97,7 @@ function wbsView() {
 function personMinutes(r, d) {
   if (r.off.some(([a, b]) => a <= d && d <= b)) return 0;
   const h = EXC.has(d) ? EXC.get(d).hours : (r.week || D.week)[wdOf(d)];
-  return hoursLen(h) * (r.capacity || 100) / 100;
+  return hoursLen(h) * capOn(r, d) / 100;
 }
 function periods(unit) {
   const lastDay = Math.ceil(D.finish / 1440) + 1, out = [];
@@ -171,6 +171,56 @@ function weekSummary(w) {
   return days.length ? `${days.map(wdName).join(' ')} · ${FMT.num.format(days.reduce((a, i) => a + hoursLen(w[i]), 0) / 60)}h/${T('wk')}` : T('Never');
 }
 function people() {
+  const mode = store('peopleMode') || 'table';
+  const bar = `<div class="subbar"><div class="seg">${[['table', T('Table & workload')], ['rbs', T('Resource breakdown (RBS)')]].map(([v, l]) => `<button data-act="people-mode" data-v="${v}" class="${mode === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>`;
+  if (mode === 'rbs') return rbsView(bar);
+  return peopleTable(bar);
+}
+/* The team as a tree: groups (Engineering/Backend) and the people in them. */
+function rbsView(bar) {
+  const loads = new Map(D.loads.map(l => [l.name, l]));
+  const root = { name: D.name, kids: new Map(), people: [] };
+  for (const r of D.resources) {
+    let n = root;
+    for (const g of (r.group || '').split(/[\/.]/).map(x => x.trim()).filter(Boolean)) { if (!n.kids.has(g)) n.kids.set(g, { name: g, kids: new Map(), people: [] }); n = n.kids.get(g); }
+    n.people.push(r);
+  }
+  const NW = 170, GAP = 18, LH = 104, nodes = [], edges = [];
+  let cursor = 30, maxDepth = 0;
+  const place = (n, depth, path) => {
+    maxDepth = Math.max(maxDepth, depth);
+    const items = [...[...n.kids.values()].map(k => ({ group: k })), ...n.people.map(p => ({ person: p }))];
+    let x;
+    const xs = items.map(it => {
+      if (it.group) return place(it.group, depth + 1, path.concat(it.group.name));
+      const px = cursor; cursor += NW + GAP; maxDepth = Math.max(maxDepth, depth + 1);
+      nodes.push({ x: px, y: 20 + (depth + 1) * LH, person: it.person, depth: depth + 1 });
+      return px;
+    });
+    if (!xs.length) { x = cursor; cursor += NW + GAP; } else x = (xs[0] + xs[xs.length - 1]) / 2;
+    xs.forEach(cx => edges.push([x, 20 + depth * LH, cx, 20 + (depth + 1) * LH, depth]));
+    const all = []; const walk = g => { all.push(...g.people); g.kids.forEach(walk); }; walk(n);
+    nodes.push({ x, y: 20 + depth * LH, group: n, depth, all });
+    return x;
+  };
+  place(root, 0, []);
+  const W = cursor + 40, H = 20 + (maxDepth + 1) * LH + 20;
+  const html = nodes.map(nd => {
+    if (nd.person) {
+      const p = nd.person, l = loads.get(p.name), work = p.kind === 'work';
+      return `<div class="wnode lv${nd.depth % LEVEL_COLORS} ${l?.over ? 'c' : ''}" style="left:${nd.x}px;top:${nd.y}px" data-act="res-hours" data-name="${esc(p.name)}" title="${esc(p.email || p.name)}">
+        <small class="wnum">${esc(p.initials || p.name.slice(0, 2).toUpperCase())} · ${work ? T('Person') : p.kind === 'material' ? T('Material') : T('Cost')}</small><b>${esc(p.name)}</b>
+        <small>${work && l ? fmtHours(l.work) + ' · ' + T('{0} task(s)', l.tasks) : ''}</small><small>${l ? money(l.cost) : ''}${l?.over ? ` · <span class="bad">${T('{0}d over capacity', l.over)}</span>` : ''}</small></div>`;
+    }
+    const g = nd.group, ls = nd.all.map(p => loads.get(p.name)).filter(Boolean);
+    return `<div class="wnode s ${nd.depth ? 'lv' + (nd.depth % LEVEL_COLORS) : ''}" style="left:${nd.x}px;top:${nd.y}px"><small class="wnum">${nd.depth ? T('Group') : T('Team')}</small><b>${esc(g.name)}</b>
+      <small>${(n => n === 1 ? T('1 person') : T('{0} people', n))(nd.all.filter(p => p.kind === 'work').length)} · ${fmtHours(ls.reduce((a, l) => a + l.work, 0))}</small><small>${money(ls.reduce((a, l) => a + l.cost, 0))}</small></div>`;
+  }).join('');
+  const lines = edges.map(([x1, y1, x2, y2, d]) => { const my = (y1 + 78 + y2) / 2; return `<path class="wedge lv${(d + 1) % LEVEL_COLORS}" d="M${x1 + NW / 2},${y1 + 78} V${my} H${x2 + NW / 2} V${y2}"/>`; }).join('');
+  const hint = D.resources.some(r => r.group) ? '' : `<div class="banner">${T('Give people a group in their details (the button on their row in the table) to build the breakdown, e.g. Engineering/Backend.')}</div>`;
+  return `<div class="view" data-v="resources">${bar}${hint}<div class="net" style="width:${W}px;height:${H}px"><svg width="${W}" height="${H}" style="position:absolute;left:0;top:0">${lines}</svg>${html}</div></div>`;
+}
+function peopleTable(bar) {
   const GW = 1000, days = spanDays(GW), W = (days + PAD) * dw, loads = new Map(D.loads.map(l => [l.name, l])), others = new Map(D.otherLoads.map(o => [o.name, o]));
   const ppl = D.resources, bad = D.loads.filter(l => l.over > 0), leveled = D.tasks.some(t => t.delay > 0);
   let rows = '', cells = '', bg = dayStripes(days);
@@ -184,21 +234,21 @@ function people() {
       return a + (p.kind === 'work' ? p.rate * t.edur * asg.units / 100 / 60 + p.perUse + p.overtime * t.ot / 60 : p.kind === 'material' ? p.rate * asg.amount + p.perUse : asg.amount);
     }, 0);
     rows += `<div class="row cols" style="top:${y}px;--cols:${tmpl}">
-      <div class="who"><div class="av" style="background:linear-gradient(135deg,hsl(${h} 70% 55%),hsl(${(h + 40) % 360} 70% 45%))">${esc(p.name.slice(0, 2).toUpperCase())}</div><input data-res="name" data-name="${nm}" value="${nm}" ${dis}>${p.pooled ? `<span class="pooled">${T('team')}</span>` : ''}</div>
+      <div class="who"><div class="av" style="background:linear-gradient(135deg,hsl(${h} 70% 55%),hsl(${(h + 40) % 360} 70% 45%))" title="${esc([p.group, p.email].filter(Boolean).join(' · '))}">${esc((p.initials || p.name.slice(0, 2)).toUpperCase().slice(0, 3))}</div><input data-res="name" data-name="${nm}" value="${nm}" ${dis}>${p.pooled ? `<span class="pooled">${T('team')}</span>` : ''}</div>
       <div><select data-res="kind" data-name="${nm}" ${dis}>${[['work', T('Person')], ['material', T('Material')], ['cost', T('Cost')]].map(([v, lab]) => `<option value="${v}" ${p.kind === v ? 'selected' : ''}>${lab}</option>`).join('')}</select></div>
       <div><input data-res="rate" data-name="${nm}" value="${p.rate || ''}" placeholder="0" ${dis} title="${esc(work ? T('Cost per hour ({0})', D.currency) : p.kind === 'material' ? T('Cost per unit') : T('Not used for cost resources'))}" ${p.kind === 'cost' ? 'disabled' : ''}></div>
       <div><input data-res="capacity" data-name="${nm}" value="${work ? p.capacity + '%' : esc(p.unit)}" placeholder="${work ? '' : T('unit')}" ${dis} title="${esc(work ? T('Max units — 50% = half time') : T('Material unit, e.g. bags'))}" ${p.kind === 'cost' ? 'disabled' : ''}></div>
       <div><input data-res="perUse" data-name="${nm}" value="${p.perUse || ''}" placeholder="—" ${dis} title="${esc(T('Cost per use (each task)'))}" ${p.kind === 'cost' ? 'disabled' : ''}></div>
       <div><input data-res="overtime" data-name="${nm}" value="${p.overtime || ''}" placeholder="—" ${dis} title="${esc(T('Overtime cost per hour'))}" ${work ? '' : 'disabled'}></div>
-      <div>${work ? `<button class="btn sm" data-act="res-hours" data-name="${nm}" ${p.pooled ? 'disabled' : ''} title="${esc(T('Personal working week'))}">${esc(weekSummary(p.week))}</button>` : ''}</div>
+      <div><button class="btn sm" data-act="res-hours" data-name="${nm}" ${p.pooled ? 'disabled' : ''} title="${esc(T('Details, rates by date, capacity and working week'))}">${work ? esc(weekSummary(p.week)) : T('Details…')}</button></div>
       <div><input data-res="off" data-name="${nm}" value="${esc(p.off.map(([a, b]) => rangeStr(a, b)).join(', '))}" placeholder="${T('Days off: 2026-12-24..2026-12-31')}" ${dis} ${work ? '' : 'disabled'}></div>
       <div class="meta">${work ? `<b>${fmtHours(l.work)}</b> · ` : ''}${T('{0} task(s)', l.tasks || D.tasks.filter(t => t.who.some(a => a.name === p.name)).length)} · ${money(work ? l.cost : cost)}${l.over ? `<br><span class="bad">${T('{0}d over capacity', l.over)}</span>` : ''}</div>
       <div>${p.pooled ? '' : `<button class="del" data-act="res-rm" data-name="${nm}" title="${T('Remove')}">${ic('trash')}</button>`}</div></div>`;
     if (!work) return;
     for (const [a, b] of p.off) cells += `<div class="poff" style="left:${X(a * 1440)}px;top:${y}px;width:${(b - a + 1) * dw}px" title="${esc(T('{0} is off', p.name))}"></div>`;
     for (const [d, u, mins, ids] of l.days) {
-      const names = ids.map(id => '#' + id + ' ' + (task(id)?.name || '')).join('\n'), over = u > p.capacity;
-      cells += `<div class="cell ${over ? 'over' : ''}" style="left:${X(d * 1440) + 1}px;width:${Math.max(dw - 2, 1)}px;top:${y + 12}px;--a:${Math.min(u / p.capacity, 1)}" title="${esc(`${p.name} · ${niceY(d)} · ${u}% / ${p.capacity}% · ${fmtHours(mins)}\n${names}`)}">${dw >= 22 ? u : ''}</div>`;
+      const names = ids.map(id => '#' + id + ' ' + (task(id)?.name || '')).join('\n'), cap = capOn(p, d), over = u > cap;
+      cells += `<div class="cell ${over ? 'over' : ''}" style="left:${X(d * 1440) + 1}px;width:${Math.max(dw - 2, 1)}px;top:${y + 12}px;--a:${Math.min(u / cap, 1)}" title="${esc(`${p.name} · ${niceY(d)} · ${u}% / ${cap}% · ${fmtHours(mins)}\n${names}`)}">${dw >= 22 ? u : ''}</div>`;
     }
     const o = others.get(p.name);
     if (o) for (const [d, u, , projects] of o.days) cells += `<div class="cell other" style="left:${X(d * 1440) + 1}px;width:${Math.max(dw - 2, 1)}px;top:${y + 42}px" title="${esc(T('Also {0}% in: {1}', u, projects.join(', ')))}"></div>`;
@@ -209,7 +259,7 @@ function people() {
     : bad.length ? `<div class="banner bad">⚠ <div><b>${bad.map(l => esc(l.name)).join(', ')}</b> ${T(bad.length > 1 ? 'are booked beyond capacity.' : 'is booked beyond capacity.')}<br><small style="color:var(--mut)">${T('Leveling delays the most flexible, lowest-priority clashing tasks, choosing whatever moves the finish date least. It adds no links and can be undone.')}</small></div><div class="acts">${leveled ? `<button class="btn" data-act="unlevel">${T('Clear leveling')}</button>` : ''}<button class="btn primary" data-act="level">${ic('level')}${T('Level resources')}</button></div></div>`
     : `<div class="banner ok">✓ ${T('Nobody is booked beyond their capacity.')}${leveled ? `<div class="acts"><button class="btn" data-act="unlevel">${T('Clear leveling')}</button></div>` : ''}</div>`;
   const H = (ppl.length + 1) * RRH;
-  return `<div class="view" data-v="resources">${banner}
+  return `<div class="view" data-v="resources">${bar}${banner}
     <div class="gt res" style="--gw:${GW}px;--rh:${RRH}px">
       <div class="corner"><div class="cols" style="--cols:${tmpl}"><div style="padding-left:46px">${T('Name')}</div><div>${T('Type')}</div><div>${T('Rate')}</div><div>${T('Capacity')}</div><div>${T('Per use')}</div><div>${T('Overtime')}</div><div>${T('Hours')}</div><div>${T('Days off')}</div><div>${T('Workload')}</div><div></div></div></div>
       <div class="thead" style="width:${W}px">${timeHeader(days)}</div>

@@ -78,6 +78,7 @@ REPORTS & TOOLS
   rplan show | gantt | resources <file>
   rplan level <file>          delay flexible tasks so nobody is over-booked
   rplan unlevel <file>        remove leveling delays
+  rplan progress <file>       set progress as planned up to the status date
   rplan baseline <file> [0-10] [clear]        save / clear a baseline (0 = the main one)
   rplan status <file> <DATE|today|none>       measure progress as of this date
   rplan holidays <file> <CO|ES|MX|UK|US>      add a country's public holidays (repeating)
@@ -251,6 +252,13 @@ fn run() -> Result<(), String> {
             save(&a[1], &p)?;
             ok(&format!("Leveled ({} task(s) delayed, no links added)", changed.len()));
             out(&report::resources(&p)?);
+        }
+        "progress" => {
+            need(2)?;
+            let mut p = load(&a[1])?;
+            let n = schedule::update_progress(&mut p)?;
+            save(&a[1], &p)?;
+            ok(&format!("Updated progress on {n} task(s) to the status date"));
         }
         "unlevel" => {
             need(2)?;

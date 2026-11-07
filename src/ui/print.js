@@ -10,6 +10,9 @@ const MM = 96 / 25.4; // CSS pixels per millimetre
 const PRINT_WHAT = () => [['gantt', T('Gantt chart')], ['table', T('Task table')], ['wbs', T('WBS chart')], ['network', T('Network diagram')], ['usage', T('Usage')], ['resources', T('People')], ['report', T('Report')]];
 // Printable columns and their widths (drawing pixels).
 const PRINT_COLS = { id: 26, wbs: 36, name: 210, dur: 46, work: 50, start: 64, finish: 64, deps: 58, who: 100, pct: 38, cost: 64, slack: 46, bstart: 64, bfinish: 64, slip: 46, deadline: 60, type: 80, note: 170 };
+// Custom fields print as extra columns.
+const pcolW = k => PRINT_COLS[k] || (k.startsWith('x:') && D.fields.some(f => 'x:' + f.name === k) ? 90 : 0);
+const pcolLabel = k => k === 'id' ? '#' : k.startsWith('x:') ? k.slice(2) : COLUMNS[k].label();
 const PRH = 20, PHDR = 34, PTITLE = 44, PLEG = 22; // row, header, title block, legend heights
 
 function psDefaults() {
@@ -55,7 +58,6 @@ function renderPrint() {
   const chart = PS.what === 'gantt' || PS.what === 'table', html = ['wbs', 'network', 'usage', 'resources'].includes(PS.what), rep = PS.what === 'report';
   const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur) === String(v) ? 'selected' : ''}>${esc(l)}</option>`;
   const chk = (k, l) => `<label><input type="checkbox" data-ps="${k}" ${PS[k] ? 'checked' : ''}> ${esc(l)}</label>`;
-  const colLabel = k => k === 'id' ? '#' : COLUMNS[k].label();
   $('#print').innerHTML = `<aside class="ps-side">
     <h3>${ic('report')}${T('Print')}<button class="x" data-psact="close" title="${T('Close')} (Esc)">×</button></h3>
     <label class="ps-f"><span>${T('What to print')}</span><select data-ps="what">${PRINT_WHAT().map(([v, l]) => opt(v, l, PS.what)).join('')}</select></label>
@@ -73,7 +75,7 @@ function renderPrint() {
     </div>`}
     ${chart ? `
     <label class="ps-f"><span>${T('Rows')}</span><select data-ps="rows">${[['all', T('All tasks')], ['shown', T('As shown in the Gantt (filters, collapsed)')], ['leaves', T('Tasks only (no summaries)')], ['summaries', T('Summary tasks')], ['critical', T('Critical')], ['active', T('Not finished')], ['milestones', T('Milestones')]].map(([v, l]) => opt(v, l, PS.rows)).join('')}</select></label>
-    <div class="ps-f"><span>${T('Columns')}</span><div class="ps-checks">${Object.keys(PRINT_COLS).map(k => `<label><input type="checkbox" data-pc="${k}" ${PS.cols.includes(k) ? 'checked' : ''}> ${esc(colLabel(k))}</label>`).join('')}</div></div>` : ''}
+    <div class="ps-f"><span>${T('Columns')}</span><div class="ps-checks">${[...Object.keys(PRINT_COLS), ...D.fields.map(f => 'x:' + f.name)].map(k => `<label><input type="checkbox" data-pc="${esc(k)}" ${PS.cols.includes(k) ? 'checked' : ''}> ${esc(pcolLabel(k))}</label>`).join('')}</div></div>` : ''}
     ${PS.what === 'gantt' ? `
     <div class="ps-row">
       <label class="ps-f" style="flex:1"><span>${T('From')}</span><input type="date" data-ps="from" value="${PS.from}"></label>
@@ -104,7 +106,7 @@ function psInput(e) {
   if (el.dataset.pc) {
     if (e.type !== 'change') return;
     const on = new Set(PS.cols); el.checked ? on.add(el.dataset.pc) : on.delete(el.dataset.pc);
-    PS.cols = Object.keys(PRINT_COLS).filter(k => on.has(k));
+    PS.cols = [...Object.keys(PRINT_COLS), ...D.fields.map(f => 'x:' + f.name)].filter(k => on.has(k));
   } else if (el.dataset.ps) {
     const k = el.dataset.ps;
     if (el.type === 'checkbox') { if (e.type !== 'change') return; PS[k] = el.checked; }
@@ -213,6 +215,7 @@ function psCell(k, t, df) {
     case 'type': return typeLabel(t);
     case 'note': return t.note || '';
   }
+  if (k.startsWith('x:')) return t.x[k.slice(2)] || '';
   return '';
 }
 function psRange() {
@@ -236,8 +239,8 @@ function psUnits(dayW) {
 // Works out the scale, the day width and how the drawing is cut into pages.
 function ganttLayout(box, nRows) {
   const withChart = PS.what === 'gantt';
-  const cols = PS.cols.filter(k => PRINT_COLS[k]);
-  const TW = cols.reduce((a, k) => a + PRINT_COLS[k], 0);
+  const cols = PS.cols.filter(k => pcolW(k));
+  const TW = cols.reduce((a, k) => a + pcolW(k), 0);
   const [d0, d1] = psRange(), days = d1 - d0;
   const extraTop = PS.title ? PTITLE : 0, legend = withChart && PS.legend ? PLEG : 0;
   let s = 1, dayW = 0, wide = 1;
@@ -310,9 +313,9 @@ function ganttPages(box) {
         g += `<rect x="0" y="${top}" width="${tw}" height="${PHDR}" fill="${pal.head}"/>`;
         for (let i = r0; i < r1; i++) if ((i - r0) % 2 && pal.alt !== '#fff') g += `<rect x="0" y="${top + PHDR + (i - r0) * PRH}" width="${tw}" height="${PRH}" fill="${pal.alt}"/>`;
         L.cols.forEach((k, c) => {
-          const w = PRINT_COLS[k], cid = `ps-c${pid}-${c}`, right = ['dur', 'work', 'pct', 'cost', 'slack', 'slip', 'id'].includes(k);
+          const w = pcolW(k), cid = `ps-c${pid}-${c}`, right = ['dur', 'work', 'pct', 'cost', 'slack', 'slip', 'id'].includes(k);
           clips += `<clipPath id="${cid}"><rect x="${x + 2}" y="${top}" width="${w - 4}" height="${PHDR + bodyH}"/></clipPath>`;
-          head += `<text x="${right ? x + w - 4 : x + 4}" y="${top + PHDR - 9}" font-size="8.5" font-weight="700" fill="#333" ${right ? 'text-anchor="end"' : ''} clip-path="url(#${cid})">${esc(k === 'id' ? '#' : COLUMNS[k].label().toUpperCase())}</text>`;
+          head += `<text x="${right ? x + w - 4 : x + 4}" y="${top + PHDR - 9}" font-size="8.5" font-weight="700" fill="#333" ${right ? 'text-anchor="end"' : ''} clip-path="url(#${cid})">${esc(pcolLabel(k).toUpperCase())}</text>`;
           for (let i = r0; i < r1; i++) {
             const r = rows[i], y = top + PHDR + (i - r0) * PRH + 13.5;
             if (r.group != null) { if (c === 0) body += `<text x="4" y="${y}" font-size="10" font-weight="700" fill="#111">${esc(r.group)} (${r.count})</text>`; continue; }

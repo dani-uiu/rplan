@@ -29,7 +29,7 @@ const COLUMNS = {
 };
 const DEFAULT_COLS = ['wbs', 'dur', 'start', 'finish', 'deps', 'who', 'pct'];
 function visibleCols() {
-  try { const c = JSON.parse(store('cols') || 'null'); if (Array.isArray(c)) return c.filter(k => COLUMNS[k]); } catch (e) {}
+  try { const c = JSON.parse(store('cols') || 'null'); if (Array.isArray(c)) return c.filter(k => COLUMNS[k] || (k.startsWith('x:') && D?.fields.some(f => 'x:' + f.name === k))); } catch (e) {}
   const c = [...DEFAULT_COLS];
   if (D && D.tasks.some(t => t.cost > 0)) c.push('cost');
   if (D && D.tasks.some(t => t.baselines.length)) c.push('slip');
@@ -39,6 +39,7 @@ function colsDef() {
   const vis = new Set(visibleCols());
   const out = [['num', '#', 50]];
   for (const k of Object.keys(COLUMNS)) if (k === 'name' || vis.has(k)) out.push([k, COLUMNS[k].label(), COLUMNS[k].w]);
+  for (const f of D?.fields || []) if (vis.has('x:' + f.name)) out.push(['x:' + f.name, f.name, f.kind === 'flag' ? 60 : 100]);
   out.push(['del', '', 30]);
   return out;
 }
@@ -96,6 +97,7 @@ function rowsModel() {
     else if (groupBy === 'phase') { let a = i; while (par[a] >= 0) a = par[a]; put(a === i ? T('(no phase)') : ts[a].name, i); }
     else if (groupBy === 'status') put(t.done ? T('Completed') : t.started ? T('In progress') : t.late ? T('Past deadline') : T('Not started'), i);
     else if (groupBy === 'critical') put(t.crit ? T('Critical') : T('Not critical'), i);
+    else if (groupBy.startsWith('x:')) put(t.x[groupBy.slice(2)] || T('(empty)'), i);
   }
   for (const [g, list] of groups) { rows.push({ kind: 'group', label: g, count: list.length }); list.forEach(i => rows.push({ kind: 'task', i })); }
   return rows;
@@ -186,7 +188,7 @@ function typeLabel(t) {
   if (t.sub) return T('Sub-project');
   if (t.edur === 0) return T('Milestone');
   if (t.manual != null) return T('Manual');
-  if (t.work != null) return T('Fixed work');
+  if (t.work != null) return t.fixedUnits ? T('Fixed units') : T('Fixed work');
   return t.elapsed ? T('Calendar time') : T('Fixed duration');
 }
 function cell(k, t, flat) {
@@ -210,7 +212,7 @@ function cell(k, t, flat) {
       const chev = !flat && t.summary ? `<button class="chev ${collapsed.has(t.id) ? 'closed' : ''}" data-act="toggle" data-id="${t.id}" title="${T('Collapse / expand')}">${ic('chev')}</button>` : '<span class="chev-sp"></span>';
       return `<div class="nm" style="padding-left:${flat ? 0 : t.level * 16}px">${chev}<span class="dot ${dot}"></span><input data-id="${t.id}" data-f="name" value="${esc(t.name)}" spellcheck="false" aria-label="${T('Task name')}" ${search ? `title="${esc(t.name)}"` : ''}>${badges}</div>`;
     }
-    case 'dur': return inp(t, 'dur', t.summary ? fmtDays(t.span) : fmtDur(t.edur, t.elapsed), t.summary || t.sub ? 'disabled' : t.work != null ? `disabled title="${esc(T('Set by the work and the people on it'))}"` : `title="3d, 4h, 30m, 2w, 3ed — 0 = ${T('milestone')}"`);
+    case 'dur': return inp(t, 'dur', t.summary ? fmtDays(t.span) : fmtDur(t.edur, t.elapsed), t.summary || t.sub ? 'disabled' : t.work != null && !t.fixedUnits ? `disabled title="${esc(T('Set by the work and the people on it'))}"` : `title="3d, 4h, 30m, 2w, 3ed — 0 = ${T('milestone')}"`);
     case 'work': return inp(t, 'work', t.work != null ? fmtHours(t.work) : '', t.summary ? `disabled placeholder="${fmtHours(t.workT)}"` : `placeholder="${t.workT ? fmtHours(t.workT) : '—'}" title="${esc(T('Total effort (e.g. 40h). Set it to make the task effort-driven: more people → shorter.'))}"`);
     case 'start': return dateCell(t.es, false);
     case 'finish': return dateCell(t.edur > 0 || t.summary ? t.ef : t.es, t.edur > 0 || t.summary);
@@ -234,6 +236,7 @@ function cell(k, t, flat) {
     case 'note': return `<div class="ro" title="${esc(t.note)}">${esc(t.note) || '—'}</div>`;
     case 'del': return `<div><button class="del" data-act="del" data-id="${t.id}" title="${T('Delete task')}">${ic('trash')}</button></div>`;
   }
+  if (k.startsWith('x:')) { const v = t.x[k.slice(2)]; return `<div class="ro" title="${esc(v || '')}">${v === 'yes' ? '✓' : esc(v || '—')}</div>`; }
   return '<div></div>';
 }
 
@@ -249,7 +252,7 @@ function gantt() {
   const welcome = !D.tasks.length ? `<div class="welcome"><h3>${T('Start planning “{0}”', esc(D.name))}</h3>
     <p>${T('Type your first task in the <b>Add a task…</b> row on the left and press Enter. Tasks are scheduled from <b>{0}</b>; change the start date at the top.', nice(0))}</p>
     <div class="acts"><button class="btn primary" data-act="add">${ic('plus')}${T('Add the first task')}</button><button class="btn" data-act="import">${ic('up')}${T('Import from ProjectLibre')}</button><button class="btn" data-act="calendar">${ic('cal')}${T('Set working hours')}</button><button class="btn" data-act="sample">${T('Try the sample project')}</button></div></div>` : '';
-  return `<div class="view ${focusCrit ? 'dim' : ''}" data-v="gantt"><div class="gt ${G.flat ? 'flat' : ''}" style="--gw:${GW}px;--cols:${tmpl};--rh:${RH}px">
+  return `<div class="view ${focusCrit ? 'dim' : ''}" data-v="gantt"><div class="gt ${G.flat ? 'flat' : ''} ${store('tracking') === '1' ? 'tracking' : ''}" style="--gw:${GW}px;--cols:${tmpl};--rh:${RH}px">
     <div class="corner"><div class="cols">${cols.map(c => `<div title="${esc(c[1])}">${esc(c[1])}</div>`).join('')}</div></div>
     <div class="thead" style="width:${W}px">${timeHeader(days)}</div>
     <div class="gridl" style="height:${H}px"><div class="rows" id="rows" style="height:${H}px"></div></div>

@@ -12,10 +12,13 @@ holiday every 12-25 observed Christmas
 holiday every 3rd Mon Jan MLK Day
 holiday every easter-2 Good Friday
 calendar Night | week Mon-Fri 22:00-24:00 | week Sat,Sun off
-resource Ana | rate 85.5 | capacity 50 | peruse 20 | overtime 120 | week Mon-Wed 08:00-17:00 | week Thu-Sun off | off 2026-11-20..2026-11-21, 2026-12-01
+resource Ana | rate 85.5 | capacity 50 | peruse 20 | overtime 120 | rate 95 from 2026-12-01 | capacity 40 from 2026-12-01 | accrue end | group Eng/Backend | initials AG | email ana@example.com | note Lead | week Mon-Wed 08:00-17:00 | week Thu-Sun off | off 2026-11-20..2026-11-21, 2026-12-01
 resource Bo | rate 70
 resource Cement | type material | unit bags | rate 9.5
 resource Travel | type cost
+field Region | text
+field Dept | code | Eng, Eng.Backend, Sales
+leveling slack split order=id
 # id | name | duration | predecessors | resources | % done | attributes
 task 1 | Phase |  |  |  | 0 | snet=2026-11-10; deadline=2026-12-20
   task 2 | A | 3d |  | Ana[50%],Bo,Cement[20],Travel[$400] | 10 | work=40h; cost=100; as=2026-11-10T08:00; ac=1200; ot=4h; priority=800; note=hi there
@@ -23,3 +26,4 @@ task 1 | Phase |  |  |  | 0 | snet=2026-11-10; deadline=2026-12-20
 task 4 | Night job | 0 | 3FF-30m |  | 0 | alap; cal=Night; split=2026-11-12..2026-11-13; inactive
 task 5 | Cure | 3ed | 4+12eh |  | 0 | fnlt=2026-11-30; manual=2026-11-16T08:00
 task 6 | Done thing | 2d |  | Bo | 100 | as=2026-11-09T08:00; af=2026-11-10T17:00
+task 7 | Review | 2d | 6FS+50% | Bo[50% delay=4h work=6h contour=bell] | 0 | work=8h; type=units; lsplit=2026-11-20; x:Region=North; x:Dept=Eng.Backend

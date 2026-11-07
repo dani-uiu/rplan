@@ -82,6 +82,7 @@ const dmin = () => D.dayMinutes;
 const hoursStr = h => h.length ? h.map(([a, b]) => `${hm(a)}-${hm(b)}`).join(' ') : 'off';
 const hoursLen = h => h.reduce((a, [x, y]) => a + y - x, 0);
 const cl = s => String(s ?? '').replace(/[|;\r\n]/g, ' ').trim();
+const fieldName = s => String(s ?? '').replace(/[|;=,\r\n]/g, ' ').replace(/\s+/g, ' ').trim();
 const rn = s => cl(s).replace(/[,\[\]#]/g, ' ').replace(/\s+/g, ' ').trim();
 const num = x => String(Math.round((+x || 0) * 10000) / 10000);
 function workDays(a, b) { let n = 0; for (let d = a; d <= b; d++) if (!isOff(d)) n++; return n; }
@@ -101,12 +102,18 @@ function when(m, isEnd) {
   const edge = h.length && (t === h[0][0] || t === h[h.length - 1][1]);
   return `${nice(d)}${edge ? '' : ' ' + hm(t % 1440)}`;
 }
-const lagStr = d => d.lag ? (d.lag > 0 ? '+' : '-') + fmtDur(Math.abs(d.lag), d.elapsed) : '';
-const kindStr = d => `${d.id}${d.kind === 'FS' ? '' : d.kind}${lagStr(d)}`;
+const lagStr = d => d.pct ? (d.pct > 0 ? '+' : '') + d.pct + '%' : d.lag ? (d.lag > 0 ? '+' : '-') + fmtDur(Math.abs(d.lag), d.elapsed) : '';
+const kindStr = d => `${d.id}${d.kind === 'FS' && !d.pct ? '' : d.kind}${lagStr(d)}`;
+const CONTOURS = ['flat', 'front', 'back', 'bell', 'early', 'late', 'turtle'];
+const CONTOUR_LABEL = () => ({ flat: T('Flat'), front: T('Front-loaded'), back: T('Back-loaded'), bell: T('Bell'), early: T('Early peak'), late: T('Late peak'), turtle: T('Turtle') });
+// Extra details of one person's assignment, as written inside the brackets.
+const asgMore = a => `${a.delay ? ` delay=${fmtDur(a.delay)}` : ''}${a.work != null ? ` work=${fmtHours(a.work)}` : ''}${a.contour && a.contour !== 'flat' ? ` contour=${a.contour}` : ''}`;
+// A person's capacity on a given day (it can change by date).
+const capOn = (r, d) => { let c = r.capacity || 100; for (const [day, v] of r.caps || []) if (day <= d) c = v; return c; };
 const depsStr = t => t.deps.map(kindStr).join(', ');
 const resOf = name => D.resources.find(r => r.name === name);
 function whoStr(t) {
-  return t.who.map(a => a.form === 'qty' ? `${a.name}[${num(a.amount)}]` : a.form === 'money' ? `${a.name}[$${num(a.amount)}]` : a.units === 100 ? a.name : `${a.name}[${a.units}%]`).join(', ');
+  return t.who.map(a => a.form === 'qty' ? `${a.name}[${num(a.amount)}]` : a.form === 'money' ? `${a.name}[$${num(a.amount)}]` : a.units === 100 && !asgMore(a) ? a.name : `${a.name}[${a.units}%${asgMore(a)}]`).join(', ');
 }
 function nowRel() { const n = new Date(); return Math.round((Date.UTC(n.getFullYear(), n.getMonth(), n.getDate(), n.getHours(), n.getMinutes()) - START) / 60000); }
 const todayOff = () => Math.floor(nowRel() / 1440);
@@ -119,37 +126,56 @@ function parseDurE(s) {
   const m = s.match(/^(\d+(?:\.\d+)?|\.\d+)\s*([a-z]*)$/);
   if (!m) throw new Error(T('"{0}" isn\'t a duration — try 3d, 4h, 30m, 2w, 3ed or 0 for a milestone', s));
   const u = m[2] || 'd', n = +m[1];
-  const table = [[/^(d|days?|dias?|días?)$/, dmin(), false], [/^(h|hrs?|hours?|horas?)$/, 60, false], [/^(m|mins?|minutes?|minutos?)$/, 1, false], [/^(w|wks?|weeks?|sem|semanas?)$/, dmin() * 5, false], [/^(ed|edays?)$/, 1440, true], [/^(eh|ehours?)$/, 60, true], [/^(em|emin)$/, 1, true], [/^(ew|eweeks?)$/, 10080, true]];
+  const table = [[/^(d|days?|dias?|días?)$/, dmin(), false], [/^(h|hrs?|hours?|horas?)$/, 60, false], [/^(m|mins?|minutes?|minutos?)$/, 1, false], [/^(w|wks?|weeks?|sem|semanas?)$/, dmin() * 5, false], [/^(mo|mon|months?|mes|meses)$/, dmin() * 20, false], [/^(emo|emonths?)$/, 43200, true], [/^(ed|edays?)$/, 1440, true], [/^(eh|ehours?)$/, 60, true], [/^(em|emin)$/, 1, true], [/^(ew|eweeks?)$/, 10080, true]];
   const hit = table.find(([re]) => re.test(u));
   if (!hit) throw new Error(T('"{0}": unknown unit — use d, h, m, w or ed', s));
   return [Math.round(n * hit[1]), hit[2]];
 }
 const parseDur = s => parseDurE(s)[0];
 function parseEffort(s) { s = String(s).trim(); if (!s) return null; const [v] = parseDurE(/^\d+(\.\d+)?$/.test(s) ? s + 'h' : s); return v; }
-function parseLagE(s) { s = String(s).trim(); if (!s || s === '0') return [0, false]; const m = s.match(/^([+-])?\s*(.+)$/); const [v, e] = parseDurE(m[2]); return [m[1] === '-' ? -v : v, e]; }
+function parseLagE(s) {
+  s = String(s).trim(); if (!s || s === '0') return [0, false, null];
+  const m = s.match(/^([+-])?\s*(.+)$/), p = m[2].match(/^(\d+(?:\.\d+)?)\s*%$/);
+  if (p) return [0, false, (m[1] === '-' ? -1 : 1) * Math.round(+p[1])];
+  const [v, e] = parseDurE(m[2]); return [m[1] === '-' ? -v : v, e, null];
+}
 function parseDeps(s) {
   const out = [];
   for (const part of String(s).split(',').map(x => x.trim()).filter(Boolean)) {
     const m = part.match(/^#?(\d+)\s*(FS|SS|FF|SF|FC|CC|FF|CF)?\s*(?:([+-])\s*(.+))?$/i);
     if (!m) throw new Error(T('"{0}" isn\'t a link — examples: 3, 3SS, 3FS+2d, 3FF-4h', part));
     const kind = { FC: 'FS', CC: 'SS', CF: 'SF' }[(m[2] || '').toUpperCase()] || (m[2] || 'FS').toUpperCase();
-    let lag = 0, elapsed = false;
-    if (m[3]) { [lag, elapsed] = parseDurE(m[4]); if (m[3] === '-') lag = -lag; }
-    out.push({ id: +m[1], kind, lag, elapsed });
+    let lag = 0, elapsed = false, pct = null;
+    if (m[3]) [lag, elapsed, pct] = parseLagE(m[3] + m[4]);
+    out.push({ id: +m[1], kind, lag, elapsed, pct });
   }
   return out;
 }
 function parseWho(s) {
   const out = [];
   for (const part of String(s).split(',').map(x => x.trim()).filter(Boolean)) {
-    const m = part.match(/^(.+?)\s*(?:\[\s*(\$)?\s*([\d.,]+)\s*(%)?\s*\])?$/);
+    const m = part.match(/^(.+?)\s*(?:\[([^\]]*)\]?)?$/);
     const name = rn(m[1]);
     if (!name) throw new Error(T('"{0}": missing a name', part));
-    const r = resOf(name), amount = m[3] ? +m[3].replace(',', '.') : null;
+    let money = false, pctSign = false, amount = null, delay = 0, work = null, contour = 'flat';
+    for (const tok of (m[2] || '').replace(/\$\s+/g, '$').replace(/\s+%/g, '%').trim().split(/\s+/).filter(Boolean)) {
+      const kv = tok.match(/^(delay|work|contour)=(.+)$/i);
+      if (kv) {
+        const k = kv[1].toLowerCase();
+        if (k === 'delay') delay = parseDur(kv[2]);
+        else if (k === 'work') work = parseEffort(kv[2]);
+        else { contour = kv[2].toLowerCase(); if (!CONTOURS.includes(contour)) throw new Error(T('"{0}": the contour can be flat, front, back, bell, early, late or turtle', part)); }
+        continue;
+      }
+      const am = tok.match(/^(\$)?([\d.,]+)(%)?$/);
+      if (!am) throw new Error(T('"{0}": units must be 1–1000%', part));
+      money = !!am[1]; pctSign = !!am[3]; amount = +am[2].replace(',', '.');
+    }
+    const r = resOf(name);
     let a;
-    if (m[2] || r?.kind === 'cost') a = { name, units: 100, amount: amount ?? 0, form: 'money' };
-    else if (r?.kind === 'material' && !m[4]) a = { name, units: 100, amount: amount ?? 1, form: 'qty' };
-    else { const u = amount == null ? 100 : Math.round(amount); if (u < 1 || u > 1000) throw new Error(T('"{0}": units must be 1–1000%', part)); a = { name, units: u, amount: u, form: 'pct' }; }
+    if (money || r?.kind === 'cost') a = { name, units: 100, amount: amount ?? 0, form: 'money' };
+    else if (r?.kind === 'material' && !pctSign) a = { name, units: 100, amount: amount ?? 1, form: 'qty' };
+    else { const u = amount == null ? 100 : Math.round(amount); if (u < 1 || u > 1000) throw new Error(T('"{0}": units must be 1–1000%', part)); a = { name, units: u, amount: u, form: 'pct', delay, work, contour }; }
     if (!out.some(x => x.name === name)) out.push(a);
   }
   return out;
@@ -227,11 +253,13 @@ function model() {
     exceptions: D.exceptions.map(e => ({ ...e, hours: e.hours.map(x => [...x]) })),
     recurring: [...D.recurring],
     calendars: D.calendars.map(c => ({ name: c.name, week: c.week.map(h => h.map(x => [...x])) })),
-    resources: D.resources.filter(r => r.declared && !r.pooled).map(r => ({ ...r, off: r.off.map(x => [...x]), week: r.week ? r.week.map(h => h.map(x => [...x])) : null })),
+    resources: D.resources.filter(r => r.declared && !r.pooled).map(r => ({ ...r, off: r.off.map(x => [...x]), week: r.week ? r.week.map(h => h.map(x => [...x])) : null, rates: r.rates.map(x => [...x]), caps: r.caps.map(x => [...x]) })),
+    fields: D.fields.map(f => ({ ...f, values: [...f.values] })), leveling: { ...D.leveling },
     tasks: D.tasks.map(t => ({
       id: t.id, name: t.name, level: t.level, dur: t.dur, elapsed: t.elapsed, work: t.work, deps: t.deps.map(d => ({ ...d })), who: t.who.map(a => ({ ...a })), pct: t.pct,
       constraint: t.constraint ? { ...t.constraint } : null, deadline: t.deadline, fixed: t.fixed, delay: t.delay, baselines: t.baselines.map(b => ({ ...b })), note: t.note,
       as: t.as, af: t.af, ac: t.ac, ot: t.ot, splits: t.splits.map(x => [...x]), manual: t.manual, inactive: t.inactive, priority: t.priority, cal: t.cal, sub: t.sub, xdeps: t.xdeps.map(x => ({ ...x })),
+      fixedUnits: t.fixedUnits, lsplits: t.lsplits.map(x => [...x]), x: { ...t.x },
     })),
   };
 }
@@ -240,7 +268,7 @@ function ensureRes(m, name) {
   let r = m.resources.find(r => r.name === name);
   if (!r) {
     const src = D.resources.find(r => r.name === name);
-    r = src ? { ...src, off: src.off.map(x => [...x]), week: src.week ? src.week.map(h => h.map(x => [...x])) : null } : { name, kind: 'work', rate: 0, capacity: 100, off: [], perUse: 0, overtime: 0, unit: '', week: null };
+    r = src ? { ...src, off: src.off.map(x => [...x]), week: src.week ? src.week.map(h => h.map(x => [...x])) : null, rates: src.rates.map(x => [...x]), caps: src.caps.map(x => [...x]) } : { name, kind: 'work', rate: 0, capacity: 100, off: [], perUse: 0, overtime: 0, unit: '', week: null, rates: [], caps: [], accrue: 'prorated', group: '', initials: '', email: '', note: '' };
     r.declared = true; r.pooled = false; m.resources.push(r);
   }
   return r;
@@ -266,10 +294,17 @@ function toText(m) {
     s += ` | rate ${num(r.rate)} | capacity ${r.capacity || 100}`;
     if (+r.perUse) s += ` | peruse ${num(r.perUse)}`;
     if (+r.overtime) s += ` | overtime ${num(r.overtime)}`;
+    for (const [d, v] of r.rates || []) s += ` | rate ${num(v)} from ${dateStr(d)}`;
+    for (const [d, v] of r.caps || []) s += ` | capacity ${v} from ${dateStr(d)}`;
+    if (r.accrue && r.accrue !== 'prorated') s += ` | accrue ${r.accrue}`;
+    for (const k of ['group', 'initials', 'email', 'note']) if (cl(r[k])) s += ` | ${k} ${cl(r[k])}`;
     if (r.week) s += weekLines(r.week).map(w => ` | week ${w}`).join('');
     if (r.off.length) s += ` | off ${r.off.map(([a, b]) => rangeStr(a, b)).join(', ')}`;
     add(s);
   }
+  for (const f of m.fields || []) add(`field ${fieldName(f.name)} | ${f.kind}${f.values.length ? ' | ' + f.values.map(v => cl(v).replace(/,/g, ' ')).join(', ') : ''}`);
+  const lv = m.leveling || {};
+  if (lv.slack || lv.split || (lv.order && lv.order !== 'standard')) add(`leveling ${[lv.slack ? 'slack' : '', lv.split ? 'split' : '', lv.order && lv.order !== 'standard' ? 'order=' + lv.order : ''].filter(Boolean).join(' ')}`);
   for (const t of m.tasks) {
     const at = [];
     if (t.constraint) at.push(t.constraint.type === 'alap' ? 'alap' : `${t.constraint.type}=${dtStr(t.constraint.at)}`);
@@ -287,11 +322,15 @@ function toText(m) {
     if (t.priority !== 500) at.push(`priority=${t.priority}`);
     if (t.cal) at.push(`cal=${cl(t.cal)}`);
     if (t.sub) at.push(`sub=${cl(t.sub)}`);
+    if (t.fixedUnits && t.work != null) at.push('type=units');
+    if (t.lsplits?.length) at.push(`lsplit=${t.lsplits.map(([a, b]) => rangeStr(a, b)).join(',')}`);
+    for (const [k, v] of Object.entries(t.x || {})) if (fieldName(k) && cl(v)) at.push(`x:${fieldName(k)}=${cl(v)}`);
     if (t.xdeps.length) at.push(`ext=${t.xdeps.map(x => `${cl(x.file).replace(/,/g, ' ')}#${x.id}${x.kind === 'FS' ? '' : x.kind}${x.lag ? (x.lag > 0 ? '+' : '-') + Math.abs(x.lag) + 'm' : ''}`).join(',')}`);
     for (const b of t.baselines) at.push(`base${b.n || ''}=${dtStr(b.s)}/${dtStr(b.f)}/${num(b.cost)}/${Math.round(b.work)}`);
     if (t.note) at.push(`note=${cl(t.note)}`);
-    const deps = t.deps.map(d => `${d.id}${d.kind}${d.lag ? (d.lag > 0 ? '+' : '-') + Math.abs(d.lag) + (d.elapsed ? 'em' : 'm') : ''}`).join(',');
-    const who = t.who.map(a => a.form === 'qty' ? `${rn(a.name)}[${num(a.amount)}]` : a.form === 'money' ? `${rn(a.name)}[$${num(a.amount)}]` : a.units === 100 ? rn(a.name) : `${rn(a.name)}[${a.units}%]`).join(',');
+    const deps = t.deps.map(d => `${d.id}${d.kind}${d.pct ? (d.pct > 0 ? '+' : '') + d.pct + '%' : d.lag ? (d.lag > 0 ? '+' : '-') + Math.abs(d.lag) + (d.elapsed ? 'em' : 'm') : ''}`).join(',');
+    const more = a => `${a.delay ? ` delay=${Math.round(a.delay)}m` : ''}${a.work != null ? ` work=${Math.round(a.work)}m` : ''}${a.contour && a.contour !== 'flat' ? ` contour=${a.contour}` : ''}`;
+    const who = t.who.map(a => a.form === 'qty' ? `${rn(a.name)}[${num(a.amount)}]` : a.form === 'money' ? `${rn(a.name)}[$${num(a.amount)}]` : a.units === 100 && !more(a) ? rn(a.name) : `${rn(a.name)}[${a.units}%${more(a)}]`).join(',');
     const dur = `${Math.max(0, Math.round(t.dur))}${t.elapsed ? 'em' : 'm'}`;
     add(`${'  '.repeat(Math.max(0, t.level))}task ${t.id} | ${cl(t.name) || 'New task'} | ${dur} | ${deps} | ${who} | ${t.pct}${at.length ? ' | ' + at.join('; ') : ''}`, t.id);
   }
@@ -513,18 +552,21 @@ function menuItems(name) {
     look: [['h', T('Chart style')], ...STYLES.map(([v, l, d]) => [`style:${v}`, l(), d(), tick(store('style') || 'modern', v)]), ['-'], ['h', T('Mode')],
       ['theme:dark', T('Dark'), '', tick(document.documentElement.dataset.theme, 'dark')], ['theme:light', T('Light'), '', tick(document.documentElement.dataset.theme, 'light')]],
     uizoom: [['h', T('App zoom')], ...UI_ZOOMS.map(z => [`uiz:${z}`, Math.round(z * 100) + '%', z === 1 ? 'Ctrl+0' : '', Math.abs(uiZ - z) < 0.001 ? 'on' : ''])],
-    level: [['level', T('Level resources'), T('delay clashing tasks')], ['unlevel', T('Clear leveling')], ['-'], ['go-people', T('Show workloads')]],
+    level: [['level', T('Level resources'), T('delay clashing tasks')], ['unlevel', T('Clear leveling')], ['-'], ['h', T('Options')],
+      ['lvl-opt:slack', T('Only within slack'), T('never moves the finish'), D.leveling.slack ? 'on' : ''], ['lvl-opt:split', T('Can pause work under way'), '', D.leveling.split ? 'on' : ''],
+      ['h', T('Which task moves first')], ...[['standard', T('Lowest priority, most slack')], ['priority', T('Lowest priority, then the later task')], ['id', T('The later task (by ID)')]].map(([v, l]) => [`lvl-order:${v}`, l, '', tick(D.leveling.order, v)]),
+      ['-'], ['go-people', T('Show workloads')]],
     baseline: [...Array(11).keys()].flatMap(n => {
       const has = D.tasks.some(t => t.baselines.some(b => b.n === n));
       if (n > 3 && !has) return [];
       return [[`baseline:${n}`, n ? T('Save baseline {0}', n) : T('Save baseline'), has ? T('saved') : ''], ...(has ? [[`baseline-clear:${n}`, n ? T('Clear baseline {0}', n) : T('Clear baseline')]] : [])];
-    }),
+    }).concat([['-'], ['h', T('Tracking')], ['update-progress', T('Update progress to the status date'), D.status != null ? nice(D.status) : T('set a status date first')], ['tracking', T('Tracking Gantt (plan vs baseline)'), '', store('tracking') === '1' ? 'on' : '']]),
     export: [['exp-xml', T('ProjectLibre / MS Project (.xml)')], ['exp-html', T('Shareable Gantt (.html)')], ['exp-plan', T('Plan file (.plan)')], ['-'], ['print', T('Print / save as PDF…'), 'Ctrl+P'], ['reports', T('Printable reports…')]],
     project: [['open', T('Open or create a project…'), 'Ctrl+O'], ['history', T('Version history…')], ['-'], ['recurring', T('Add a recurring task…')], ['-'], ['new-project', T('Clear this project'), T('keeps your calendar')], ['sample', T('Load the sample project')], ['-'], ['import', T('Import ProjectLibre / MS Project…'), '.xml']],
     filter: [['h', T('Show')], ...[['all', T('All tasks')], ['critical', T('Critical')], ['late', T('Past deadline')], ['behind', T('Behind schedule')], ['notstarted', T('Not started')], ['inprogress', T('In progress')], ['done', T('Completed')], ['milestones', T('Milestones')], ['summaries', T('Summary tasks')], ['unassigned', T('Unassigned')], ['inactive', T('Inactive')]].map(([v, l]) => [`filter:${v}`, l, '', tick(filter, v)]),
       ...(people.length ? [['h', T('Assigned to')], ...people.map(p => [`filter:person:${p}`, p, '', tick(filter, 'person:' + p)])] : [])],
     sort: [['file', T('Outline order')], ['start', T('Start date')], ['finish', T('Finish date')], ['dur', T('Duration')], ['slack', T('Slack (least first)')], ['name', T('Name')], ['cost', T('Cost (highest first)')], ['priority', T('Priority (highest first)')]].map(([v, l]) => [`sort:${v}`, l, '', tick(sortBy, v)]),
-    group: [['none', T('No grouping')], ['person', T('Person')], ['phase', T('Phase (top summary)')], ['status', T('Status')], ['critical', T('Critical / not critical')]].map(([v, l]) => [`group:${v}`, l, '', tick(groupBy, v)]),
+    group: [['none', T('No grouping')], ['person', T('Person')], ['phase', T('Phase (top summary)')], ['status', T('Status')], ['critical', T('Critical / not critical')], ...D.fields.map(f => ['x:' + f.name, f.name])].map(([v, l]) => [`group:${v}`, l, '', tick(groupBy, v)]),
   }[name];
   return m;
 }
@@ -537,7 +579,8 @@ function openMenu(name, btn) {
     el.innerHTML = iss.length ? iss.map((x, k) => `<button class="issue" data-act="issue" data-k="${k}"><i>${x.icon}</i><span>${esc(x.text)}<small>${esc(x.sub || '')}</small></span></button>`).join('') : `<div class="empty">✓ ${T('No problems found')}</div>`;
     el.style.width = '420px';
   } else if (name === 'columns') {
-    el.innerHTML = `<div class="mh">${T('Columns')}</div>` + Object.entries(COLUMNS).filter(([k]) => k !== 'name').map(([k, c]) => `<label><input type="checkbox" data-c="${k}" ${visibleCols().includes(k) ? 'checked' : ''}> ${c.label()}</label>`).join('') + `<hr><button data-act="cols-reset">${T('Reset to default')}</button>`;
+    el.innerHTML = `<div class="mh">${T('Columns')}</div>` + Object.entries(COLUMNS).filter(([k]) => k !== 'name').map(([k, c]) => `<label><input type="checkbox" data-c="${k}" ${visibleCols().includes(k) ? 'checked' : ''}> ${c.label()}</label>`).join('')
+      + (D.fields.length ? `<div class="mh">${T('Custom fields')}</div>` + D.fields.map(f => `<label><input type="checkbox" data-c="x:${esc(f.name)}" ${visibleCols().includes('x:' + f.name) ? 'checked' : ''}> ${esc(f.name)}</label>`).join('') : '') + `<hr><button data-act="cols-reset">${T('Reset to default')}</button>`;
   } else {
     el.innerHTML = menuItems(name).map(([a, l, k, on]) => a === '-' ? '<hr>' : a === 'h' ? `<div class="mh">${l}</div>` : `<button data-act="${esc(a)}" class="${on || ''}">${esc(l)}<small>${esc(k || '')}</small></button>`).join('');
   }

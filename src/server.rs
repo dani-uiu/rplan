@@ -288,13 +288,20 @@ pub fn project_json(p: &Project, path: &str) -> Result<String, String> {
     let (y0, y1) = (civil_from_days(p.start).0 - 1, civil_from_days(s.finish.div_euclid(DAY)).0 + 2);
     let holidays: Vec<String> = expand_recurring(&p.recurring, y0..=y1).iter().map(|e| format!("[{},{}]", dayoff(e.from), js(&e.name))).collect();
     let _ = write!(o, r#""holidays":[{}],"#, holidays.join(","));
+    let fields: Vec<String> = p.fields.iter().map(|f| format!(r#"{{"name":{},"kind":"{}","values":[{}]}}"#, js(&f.name), f.kind, f.values.iter().map(|v| js(v)).collect::<Vec<_>>().join(","))).collect();
+    let order = match p.leveling.order {
+        LevelOrder::Standard => "standard",
+        LevelOrder::Priority => "priority",
+        LevelOrder::Id => "id",
+    };
+    let _ = write!(o, r#""fields":[{}],"leveling":{{"slack":{},"split":{},"order":"{order}"}},"#, fields.join(","), p.leveling.slack_only, p.leveling.split);
     let declared: Vec<&str> = p.resources.iter().filter(|r| !r.pooled).map(|r| r.name.as_str()).collect();
     let ress: Vec<String> = p
         .all_resources()
         .iter()
         .map(|r| {
             format!(
-                r#"{{"name":{},"kind":"{}","rate":{},"capacity":{},"declared":{},"pooled":{},"perUse":{},"overtime":{},"unit":{},"week":{},"off":{}}}"#,
+                r#"{{"name":{},"kind":"{}","rate":{},"capacity":{},"declared":{},"pooled":{},"perUse":{},"overtime":{},"unit":{},"week":{},"off":{},"rates":[{}],"caps":[{}],"accrue":"{}","group":{},"initials":{},"email":{},"note":{}}}"#,
                 js(&r.name),
                 match r.kind {
                     ResKind::Work => "work",
@@ -309,7 +316,14 @@ pub fn project_json(p: &Project, path: &str) -> Result<String, String> {
                 num(r.overtime),
                 js(&r.unit),
                 r.week.as_ref().map_or("null".into(), week),
-                ranges(&r.off)
+                ranges(&r.off),
+                r.rates.iter().map(|(d, x)| format!("[{},{}]", dayoff(*d), num(*x))).collect::<Vec<_>>().join(","),
+                r.caps.iter().map(|(d, x)| format!("[{},{x}]", dayoff(*d))).collect::<Vec<_>>().join(","),
+                r.accrue.code(),
+                js(&r.group),
+                js(&r.initials),
+                js(&r.email),
+                js(&r.note)
             )
         })
         .collect();
@@ -321,7 +335,8 @@ pub fn project_json(p: &Project, path: &str) -> Result<String, String> {
                 .iter()
                 .map(|(d, (u, m, ids))| format!("[{},{u},{m},[{}]]", dayoff(*d), ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",")))
                 .collect();
-            format!(r#"{{"name":{},"capacity":{},"work":{},"cost":{},"tasks":{},"over":{},"days":[{}]}}"#, js(&l.name), l.capacity, l.work, num(l.cost), l.tasks, l.over_days, days.join(","))
+            let caps: Vec<String> = l.caps.iter().map(|(d, c)| format!("[{},{c}]", dayoff(*d))).collect();
+            format!(r#"{{"name":{},"capacity":{},"work":{},"cost":{},"tasks":{},"over":{},"days":[{}],"caps":[{}]}}"#, js(&l.name), l.capacity, l.work, num(l.cost), l.tasks, l.over_days, days.join(","), caps.join(","))
         })
         .collect();
     let others: Vec<String> = crate::external::other_loads(p, path)
@@ -355,7 +370,7 @@ pub fn project_json(p: &Project, path: &str) -> Result<String, String> {
     );
     for (i, t) in p.tasks.iter().enumerate() {
         let sc = s.tasks[i];
-        let deps: Vec<String> = t.deps.iter().map(|d| format!(r#"{{"id":{},"kind":"{}","lag":{},"elapsed":{}}}"#, d.id, d.kind.as_str(), d.lag, d.elapsed)).collect();
+        let deps: Vec<String> = t.deps.iter().map(|d| format!(r#"{{"id":{},"kind":"{}","lag":{},"elapsed":{},"pct":{}}}"#, d.id, d.kind.as_str(), d.lag, d.elapsed, d.pct.map_or("null".into(), |x| x.to_string()))).collect();
         let who: Vec<String> = t
             .who
             .iter()
@@ -365,7 +380,7 @@ pub fn project_json(p: &Project, path: &str) -> Result<String, String> {
                     Form::Qty => "qty",
                     Form::Money => "money",
                 };
-                format!(r#"{{"name":{},"units":{},"amount":{},"form":"{form}"}}"#, js(&a.name), a.units, num(a.amount))
+                format!(r#"{{"name":{},"units":{},"amount":{},"form":"{form}","delay":{},"work":{},"contour":"{}"}}"#, js(&a.name), a.units, num(a.amount), a.delay, opt(a.work), a.contour.code())
             })
             .collect();
         let cons = match t.constraint {
@@ -381,9 +396,10 @@ pub fn project_json(p: &Project, path: &str) -> Result<String, String> {
         let sub_info = t.sub_info.as_ref().map_or("null".into(), |x| format!(r#"{{"name":{},"span":{},"cost":{},"pct":{},"tasks":{}}}"#, js(&x.name), x.span, num(x.cost), num(x.pct), x.tasks));
         let xdeps: Vec<String> = t.xdeps.iter().map(|x| format!(r#"{{"file":{},"id":{},"kind":"{}","lag":{}}}"#, js(&x.file), x.id, x.kind.as_str(), x.lag)).collect();
         let ext: Vec<String> = t.ext.iter().map(|x| format!(r#"{{"label":{},"es":{},"ef":{}}}"#, js(&x.label), rel(x.es), rel(x.ef))).collect();
+        let xf: Vec<String> = t.fields.iter().map(|(k, v)| format!("{}:{}", js(k), js(v))).collect();
         let _ = write!(
             o,
-            r#"{}{{"id":{},"name":{},"level":{},"wbs":"{}","summary":{},"dur":{},"edur":{},"elapsed":{},"work":{},"workT":{},"deps":[{}],"who":[{}],"pct":{},"pctR":{},"constraint":{cons},"deadline":{},"fixed":{},"cost":{},"delay":{},"base":{},"baselines":[{}],"note":{},"es":{},"ef":{},"ls":{},"lf":{},"slack":{},"free":{},"crit":{},"late":{},"conflict":{},"span":{},"slip":{},"as":{},"af":{},"ac":{},"ot":{},"splits":{},"manual":{},"inactive":{},"priority":{},"cal":{},"sub":{},"subInfo":{sub_info},"xdeps":[{}],"ext":[{}],"done":{},"started":{},"bac":{},"pv":{},"ev":{},"acv":{}}}"#,
+            r#"{}{{"id":{},"name":{},"level":{},"wbs":"{}","summary":{},"dur":{},"edur":{},"elapsed":{},"work":{},"workT":{},"deps":[{}],"who":[{}],"pct":{},"pctR":{},"constraint":{cons},"deadline":{},"fixed":{},"cost":{},"delay":{},"base":{},"baselines":[{}],"note":{},"es":{},"ef":{},"ls":{},"lf":{},"slack":{},"free":{},"crit":{},"late":{},"conflict":{},"span":{},"slip":{},"as":{},"af":{},"ac":{},"ot":{},"splits":{},"manual":{},"inactive":{},"priority":{},"cal":{},"sub":{},"subInfo":{sub_info},"xdeps":[{}],"ext":[{}],"done":{},"started":{},"bac":{},"pv":{},"ev":{},"acv":{},"fixedUnits":{},"lsplits":{},"x":{{{}}}}}"#,
             if i > 0 { "," } else { "" },
             t.id,
             js(&t.name),
@@ -434,7 +450,10 @@ pub fn project_json(p: &Project, path: &str) -> Result<String, String> {
             num(sc.bac),
             num(sc.pv),
             num(sc.ev),
-            num(sc.ac)
+            num(sc.ac),
+            t.fixed_units,
+            ranges(&t.lsplits),
+            xf.join(",")
         );
     }
     o.push_str("]}");
@@ -447,19 +466,25 @@ pub fn usage_json(p: &Project) -> Result<String, String> {
     let u = task_usage(p, &s)?;
     let days = |v: &[(i64, i64)], f: f64| v.iter().map(|(d, m)| format!("[{},{}]", d - p.start, (*m as f64 * f).round() as i64)).collect::<Vec<_>>().join(",");
     let tasks: Vec<String> = p.tasks.iter().zip(&u).filter(|(_, v)| !v.is_empty()).map(|(t, v)| format!("[{},[{}]]", t.id, days(v, 1.0))).collect();
+    let by_person = assignment_usage(p, &s)?;
     let mut people: Vec<String> = vec![];
     for r in p.all_resources().iter().filter(|r| r.kind == ResKind::Work) {
         let mut rows = vec![];
-        for (t, v) in p.tasks.iter().zip(&u) {
-            let Some(a) = t.who.iter().find(|a| a.name == r.name) else { continue };
-            let total: f64 = t.who.iter().filter(|x| p.resource(&x.name).kind == ResKind::Work).map(|x| x.units as f64).sum();
-            if total > 0.0 && !v.is_empty() {
-                rows.push(format!("[{},[{}]]", t.id, days(v, a.units as f64 / total)));
+        for (t, parts) in p.tasks.iter().zip(&by_person) {
+            if let Some((_, v)) = parts.iter().find(|(n, v)| *n == r.name && !v.is_empty()) {
+                rows.push(format!("[{},[{}]]", t.id, days(v, 1.0)));
             }
         }
         people.push(format!(r#"{{"name":{},"tasks":[{}]}}"#, js(&r.name), rows.join(",")));
     }
-    Ok(format!(r#"{{"ok":true,"tasks":[{}],"people":[{}]}}"#, tasks.join(","), people.join(",")))
+    let costs: Vec<String> = p
+        .tasks
+        .iter()
+        .zip(cost_days(p, &s)?)
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(t, v)| format!("[{},[{}]]", t.id, v.iter().map(|(d, c)| format!("[{},{}]", d - p.start, num(*c))).collect::<Vec<_>>().join(",")))
+        .collect();
+    Ok(format!(r#"{{"ok":true,"tasks":[{}],"people":[{}],"costs":[{}]}}"#, tasks.join(","), people.join(","), costs.join(",")))
 }
 
 fn load(path: &str) -> Result<Project, String> {
@@ -667,6 +692,10 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
             Ok(if n == 0 { "Nothing to level — nobody is over-allocated ✓".into() } else { format!("Leveled: delayed {n} task(s) so nobody is double-booked") })
         }),
         ("POST", "/api/unlevel") => mutate(&|p| Ok(format!("Removed leveling delays from {} task(s)", clear_leveling(p)))),
+        ("POST", "/api/progress") => mutate(&|p| {
+            let n = update_progress(p)?;
+            Ok(if n == 0 { "Progress is already up to the status date ✓".into() } else { format!("Updated progress on {n} task(s) to the status date") })
+        }),
         ("POST", "/api/baseline") => {
             let n = param("n").unwrap_or(0).min(BASELINES - 1);
             mutate(&|p| set_baseline(p, n).map(|_| if n == 0 { "Baseline saved — later changes show as slips".into() } else { format!("Saved baseline {n}") }))

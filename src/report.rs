@@ -187,7 +187,7 @@ pub fn resources(p: &Project) -> Result<String, String> {
             l.capacity,
             money(l.cost, &p.currency)
         );
-        let bad: Vec<(&i64, &(u32, i64, Vec<u32>))> = l.days.iter().filter(|(_, v)| v.0 > l.capacity).collect();
+        let bad: Vec<(&i64, &(u32, i64, Vec<u32>))> = l.days.iter().filter(|(d, v)| v.0 > l.cap_on(**d)).collect();
         if let (Some(f), Some(e)) = (bad.first(), bad.last()) {
             over += 1;
             let mut ids: Vec<u32> = bad.iter().flat_map(|(_, v)| v.2.iter().copied()).collect();
