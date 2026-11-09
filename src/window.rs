@@ -145,9 +145,9 @@ pub fn run(url: &str, title: &str, on_close: impl Fn() + 'static, on_open: impl 
             Event::NewEvents(tao::event::StartCause::Init) => _menu = mac_menu(),
             Event::UserEvent(UserEvent::Title(t)) => window.set_title(&t),
             Event::Opened { urls } => {
-                let files = urls.iter().filter_map(|u| u.to_file_path().ok()).map(|f| f.to_string_lossy().to_string());
+                let mut files = urls.iter().filter_map(|u| u.to_file_path().ok()).map(|f| f.to_string_lossy().to_string());
                 // One window, one project: the last file opened wins.
-                if let Some(f) = files.filter(|f| f.to_ascii_lowercase().ends_with(".plan")).last() {
+                if let Some(f) = files.rfind(|f| f.to_ascii_lowercase().ends_with(".plan")) {
                     if on_open(f) {
                         let _ = webview.load_url(&home);
                     }

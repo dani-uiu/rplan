@@ -110,6 +110,8 @@ const CONTOUR_LABEL = () => ({ flat: T('Flat'), front: T('Front-loaded'), back: 
 const asgMore = a => `${a.delay ? ` delay=${fmtDur(a.delay)}` : ''}${a.work != null ? ` work=${fmtHours(a.work)}` : ''}${a.contour && a.contour !== 'flat' ? ` contour=${a.contour}` : ''}`;
 // A person's capacity on a given day (it can change by date).
 const capOn = (r, d) => { let c = r.capacity || 100; for (const [day, v] of r.caps || []) if (day <= d) c = v; return c; };
+// Is this [day, units, …] entry of a person's workload above their capacity that day?
+const overOn = l => { const r = resOf(l.name) || l; return ([d, u]) => u > capOn(r, d); };
 const depsStr = t => t.deps.map(kindStr).join(', ');
 const resOf = name => D.resources.find(r => r.name === name);
 function whoStr(t) {
@@ -337,6 +339,7 @@ function toText(m) {
   return { text: L.join('\n') + '\n', lines };
 }
 function friendly(err, lines) { const m = /^line (\d+): ([\s\S]*)$/.exec(err || ''); if (m) { const id = lines[+m[1] - 1]; return id ? T('Task #{0}: {1}', id, tr(m[2])) : tr(m[2]); } return tr(err); }
+function remember(text) { undo.push(text); if (undo.length > 300) undo.shift(); redo = []; }
 function enqueue(fn) { const p = chain.then(fn); chain = p.catch(() => {}); return p; }
 function commit(fn, msg) { return enqueue(() => doCommit(fn, msg)); }
 async function doCommit(fn, msg) {
@@ -348,7 +351,7 @@ async function doCommit(fn, msg) {
   const prev = D, note = typeof msg === 'string' ? msg : 'Edit';
   const j = await api('POST', '/api/save?note=' + encodeURIComponent(note.slice(0, 120)), text);
   if (!j.ok) { if (!j.handled) toast(friendly(j.error, lines), 1); render(); return false; }
-  if (j.text !== prev.text) { undo.push(prev.text); if (undo.length > 300) undo.shift(); redo = []; }
+  if (j.text !== prev.text) remember(prev.text);
   accept(j); render(); saved();
   const note2 = typeof msg === 'function' ? msg(j) : msg;
   if (note2) toast(note2);
@@ -360,7 +363,7 @@ function action(url, confirmMsg) {
   return enqueue(async () => {
     const prev = D, j = await api('POST', url);
     if (!j.ok) { if (!j.handled) toast(tr(j.error), 1); return; }
-    if (j.text !== prev.text) { undo.push(prev.text); redo = []; }
+    if (j.text !== prev.text) remember(prev.text);
     accept(j); render(); saved(); if (j.note) toast(tr(j.note));
     warnChanges(prev, j);
   });
@@ -387,7 +390,7 @@ function warnChanges(prev, next) {
   if (nowLate.length) msgs.push(T('{0} will now miss its deadline', nowLate.map(t => `“${t.name}”`).join(', ')));
   const overBefore = new Map(prev.loads.map(l => [l.name, l.over]));
   for (const l of next.loads) if (l.over > (overBefore.get(l.name) || 0)) {
-    const first = l.days.find(([, u]) => u > l.capacity);
+    const first = l.days.find(overOn(l));
     msgs.push(T('{0} is now over-booked ({1} days, starting {2})', l.name, l.over, first ? nice(first[0]) : ''));
   }
   for (const m of msgs.slice(0, 3)) toast('⚠ ' + m, 'warn');
@@ -413,7 +416,7 @@ function issues() {
   }
   for (const l of D.loads) {
     if (!l.over) continue;
-    const weeks = [...new Set(l.days.filter(([, u]) => u > l.capacity).map(([d]) => d - ((wdOf(d) + 6) % 7)))];
+    const weeks = [...new Set(l.days.filter(overOn(l)).map(([d]) => d - ((wdOf(d) + 6) % 7)))];
     out.push({ icon: '👥', text: T('{0} is over-booked on {1} day(s)', l.name, l.over), sub: weeks.slice(0, 4).map(w => T('week of {0}', nice(w))).join(' · '), person: l.name, sev: 2 });
   }
   const unassigned = D.tasks.filter(t => !t.summary && t.edur > 0 && !t.who.length && !t.sub && !t.inactive).length;

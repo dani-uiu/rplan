@@ -8,6 +8,9 @@
 //! - `report`:   terminal reports and HTML export
 //! - `server`:   the local web server behind `rplan ui`
 
+// The schedule passes hand around plain tuples; naming each one wouldn't make them clearer.
+#![allow(clippy::type_complexity)]
+
 mod calendar;
 mod external;
 mod history;
@@ -50,6 +53,7 @@ task 9 | Launch | 0 | 8 | PM | 0
 const HELP: &str = "rplan — plain-text project scheduling (critical path, Gantt, resources)
 
 OPEN THE APP
+  rplan <file.plan>                           same as `rplan app <file.plan>`
   rplan app <file>                            desktop window (closes rplan when you close it)
   rplan ui <file> [--port 7878] [--no-open]   same editor in a browser tab
 
@@ -139,9 +143,24 @@ fn load(path: &str) -> Result<Project, String> {
     Ok(p)
 }
 
-fn save(path: &str, p: &Project) -> Result<(), String> {
+/// The project as `.plan` text, refusing anything that can't be scheduled or read back,
+/// so a bad change never reaches the file.
+pub fn plan_text(p: &Project) -> Result<String, String> {
     schedule::schedule(p)?;
-    fs::write(path, p.serialize()).map_err(|e| format!("can't write {path}: {e}"))
+    let text = p.serialize();
+    Project::parse(&text).map_err(|e| format!("this change would make the file unreadable ({e})"))?;
+    Ok(text)
+}
+
+/// Replaces the file in one step, so it's never left half-written.
+pub fn write_atomic(path: &str, text: &str) -> Result<(), String> {
+    let tmp = format!("{path}.tmp");
+    fs::write(&tmp, text).map_err(|e| format!("can't write {tmp}: {e}"))?;
+    fs::rename(&tmp, path).map_err(|e| format!("can't replace {path}: {e}"))
+}
+
+fn save(path: &str, p: &Project) -> Result<(), String> {
+    write_atomic(path, &plan_text(p)?)
 }
 
 fn flag(a: &[String], name: &str) -> Option<String> {
@@ -163,7 +182,7 @@ fn subtree_end(p: &Project, i: usize) -> usize {
     j
 }
 
-/// Today's date (UTC) as a day number.
+/// Today's local date as a day number.
 pub fn today() -> i64 {
     local_today()
 }
@@ -199,6 +218,8 @@ fn run() -> Result<(), String> {
     let a: Vec<String> = env::args().skip(1).collect();
     #[cfg(target_os = "macos")]
     let a = mac_app_args(a);
+    // `rplan My.plan` (or a file dropped on the program) opens it in the app.
+    let a = if a.len() == 1 && a[0].to_ascii_lowercase().ends_with(".plan") { vec!["app".into(), a[0].clone()] } else { a };
     let need = |n: usize| if a.len() < n { Err(format!("not enough arguments\n\n{HELP}")) } else { Ok(()) };
     let cmd = a.first().map(String::as_str).unwrap_or("");
     match cmd {
@@ -327,7 +348,11 @@ fn run() -> Result<(), String> {
         "add" => {
             need(4)?;
             let mut p = load(&a[1])?;
-            let mut t = Task::new(p.next_id(), &clean(&a[2]), parse_dur(&a[3], p.day_minutes)?);
+            let dur = parse_dur(&a[3], p.day_minutes)?;
+            if dur < 0 {
+                return Err("duration can't be negative".into());
+            }
+            let mut t = Task::new(p.next_id(), &clean(&a[2]), dur);
             t.deps = parse_deps(&flag(&a, "--after").unwrap_or_default(), p.day_minutes)?;
             t.who = parse_who(&flag(&a, "--who").unwrap_or_default())?;
             let id = t.id;
@@ -371,7 +396,7 @@ fn run() -> Result<(), String> {
                 t.deadline = if v == "none" { None } else { Some(parse_date(&v)?) };
             }
             if let Some(v) = flag(&a, "--cost") {
-                t.cost = v.parse().map_err(|_| "bad --cost")?;
+                t.cost = parse_num(&v).ok_or("bad --cost")?;
             }
             if let Some(v) = flag(&a, "--note") {
                 t.note = clean(&v);
@@ -452,23 +477,32 @@ fn run() -> Result<(), String> {
         "resource" => {
             need(3)?;
             let mut p = load(&a[1])?;
-            let mut r = p.resource(&a[2]);
+            let name = clean(&a[2]);
+            if name.is_empty() {
+                return Err("the resource needs a name".into());
+            }
+            let mut r = p.resource(&name).into_owned();
+            // Editing someone from the shared team file makes a local copy that overrides it.
+            r.pooled = false;
             if let Some(v) = flag(&a, "--rate") {
-                r.rate = v.parse().map_err(|_| "bad --rate")?;
+                r.rate = parse_num(&v).ok_or("bad --rate")?;
             }
             if let Some(v) = flag(&a, "--capacity") {
-                r.capacity = v.trim_end_matches('%').parse().map_err(|_| "bad --capacity")?;
+                r.capacity = v.trim_end_matches('%').parse().ok().filter(|c| *c > 0).ok_or("bad --capacity (a percentage above 0)")?;
             }
             if let Some(v) = flag(&a, "--off") {
                 r.off = v.split(',').map(str::trim).filter(|x| !x.is_empty()).map(parse_range).collect::<Result<_, _>>()?;
             }
-            let name = r.name.clone();
-            p.resources.retain(|x| x.name != name);
-            p.resources.push(r);
+            match p.resources.iter_mut().find(|x| x.name == name) {
+                Some(x) => *x = r,
+                None => p.resources.push(r),
+            }
             save(&a[1], &p)?;
             ok(&format!("Saved resource {name}"));
         }
-        _ => println!("{HELP}"),
+        "" | "help" | "-h" | "--help" => println!("{HELP}"),
+        "version" | "-V" | "--version" => println!("rplan {}", env!("CARGO_PKG_VERSION")),
+        _ => return Err(format!("unknown command '{cmd}' — run `rplan help` to see them all")),
     }
     Ok(())
 }

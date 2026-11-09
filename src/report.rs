@@ -34,7 +34,7 @@ pub fn money(x: f64, cur: &str) -> String {
     let s = whole.abs().to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -73,8 +73,8 @@ pub fn show(p: &Project) -> Result<String, String> {
     let _ = writeln!(o, "{BLD}{}{RST}", p.name);
     let _ = writeln!(
         o,
-        "{BLD}{:<6} {:>4}  {}  {:>6}  {:<16}  {:<16}  {:>6}  {:<12} {:>4}  {}{RST}",
-        "WBS", "ID", pad("Task", w), "Dur", "Start", "Finish", "Slack", "Who", "Done", "After"
+        "{BLD}{:<6} {:>4}  {}  {:>6}  {:<16}  {:<16}  {:>6}  {:<12} {:>4}  After{RST}",
+        "WBS", "ID", pad("Task", w), "Dur", "Start", "Finish", "Slack", "Who", "Done"
     );
     for (i, t) in p.tasks.iter().enumerate() {
         let sc = s.tasks[i];

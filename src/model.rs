@@ -24,6 +24,7 @@
 //! id | name | duration | predecessors | resources | % done | attributes
 
 use crate::calendar::*;
+use std::borrow::Cow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Link {
@@ -776,6 +777,11 @@ pub fn fmt_num(x: f64) -> String {
     }
 }
 
+/// A plain number: rejects `nan` and `inf`, which Rust's own parser accepts.
+pub fn parse_num(s: &str) -> Option<f64> {
+    s.trim().parse::<f64>().ok().filter(|x| x.is_finite())
+}
+
 /// Removes characters that would break the line-based format.
 pub fn clean(s: &str) -> String {
     s.replace(['|', '\r', '\n', ';'], " ").trim().to_string()
@@ -820,7 +826,7 @@ fn parse_baseline(v: &str) -> Result<Baseline, String> {
     Ok(Baseline {
         start: parse_datetime(p[0])?,
         finish: parse_datetime(p[1])?,
-        cost: p.get(2).map(|c| c.parse().map_err(|_| format!("bad baseline cost '{c}'"))).transpose()?.unwrap_or(0.0),
+        cost: p.get(2).map(|c| parse_num(c).ok_or(format!("bad baseline cost '{c}'"))).transpose()?.unwrap_or(0.0),
         work: p.get(3).map(|w| w.parse().map_err(|_| format!("bad baseline work '{w}'"))).transpose()?.unwrap_or(0),
     })
 }
@@ -928,7 +934,7 @@ impl Project {
                     for kv in &f[1..] {
                         let (k, v) = kv.split_once([' ', '=']).unwrap_or((kv, ""));
                         let v = v.trim();
-                        let num = |v: &str| v.parse::<f64>().map_err(|_| err(format!("bad {k} '{v}'")));
+                        let num = |v: &str| parse_num(v).ok_or_else(|| err(format!("bad {k} '{v}'")));
                         match k {
                             "rate" => match v.split_once(" from ") {
                                 Some((x, d)) => r.rates.push((parse_date(d.trim()).map_err(err)?, num(x.trim())?)),
@@ -1018,13 +1024,13 @@ impl Project {
                             "snet" | "snlt" | "fnet" | "fnlt" | "mso" | "mfo" => t.constraint = Constraint::from_code(k, Some(dt(v)?)).unwrap(),
                             "alap" => t.constraint = Constraint::Alap,
                             "deadline" => t.deadline = Some(parse_date(v).map_err(err)?),
-                            "cost" => t.cost = v.parse().map_err(|_| err(format!("bad cost '{v}'")))?,
+                            "cost" => t.cost = parse_num(v).ok_or_else(|| err(format!("bad cost '{v}'")))?,
                             "delay" => t.delay = parse_dur(v, p.day_minutes).map_err(err)?.max(0),
                             "note" => t.note = v.to_string(),
                             "work" => t.work = Some(parse_dur(v, p.day_minutes).map_err(err)?.max(0)),
                             "as" => t.actual_start = Some(dt(v)?),
                             "af" => t.actual_finish = Some(dt(v)?),
-                            "ac" => t.actual_cost = Some(v.parse().map_err(|_| err(format!("bad actual cost '{v}'")))?),
+                            "ac" => t.actual_cost = Some(parse_num(v).ok_or_else(|| err(format!("bad actual cost '{v}'")))?),
                             "ot" => t.overtime = parse_dur(v, p.day_minutes).map_err(err)?.max(0),
                             "split" => t.splits = parse_ranges(v).map_err(err)?,
                             "manual" => t.manual = Some(dt(v)?),
@@ -1303,8 +1309,9 @@ impl Project {
         Ok(base.with_week(&c.week))
     }
 
-    pub fn resource(&self, name: &str) -> Resource {
-        self.resources.iter().find(|r| r.name == name).cloned().unwrap_or_else(|| Resource::new(name))
+    /// The declared resource, or a plain full-time person for a name that's only used on tasks.
+    pub fn resource(&self, name: &str) -> Cow<'_, Resource> {
+        self.resources.iter().find(|r| r.name == name).map_or_else(|| Cow::Owned(Resource::new(name)), Cow::Borrowed)
     }
 
     /// Everyone named on a task or declared as a resource, declared ones first.

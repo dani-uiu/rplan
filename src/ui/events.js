@@ -223,7 +223,7 @@ async function act(a, el) {
     case 'hist-restore': enqueue(async () => {
       const prev = D.text, j = await api('POST', '/api/history/restore?n=' + k);
       if (!j.ok) { if (!j.handled) toast(tr(j.error), 1); return; }
-      undo.push(prev); redo = []; $('#dlg').close(); dlgKind = null; accept(j); render(); saved(); toast(T('Restored the earlier version — Ctrl+Z goes back'));
+      remember(prev); $('#dlg').close(); dlgKind = null; accept(j); render(); saved(); toast(T('Restored the earlier version — Ctrl+Z goes back'));
     }); break;
     case 'recurring': openDialog('recurring'); break;
     case 'rec-create': try { createRecurring(); } catch (e) { toast(e.message, 1); } break;
@@ -471,7 +471,7 @@ async function importFile(input) {
   return enqueue(async () => {
     const prev = D.text, j = await api('POST', '/api/import', xml);
     if (!j.ok) { if (!j.handled) toast(T('Import failed: {0}', tr(j.error)), 1); return; }
-    undo.push(prev); redo = []; sel = new Set(); primary = null;
+    remember(prev); sel = new Set(); primary = null;
     accept(j); fit(); saved(); toast(T('Imported {0} tasks and {1} people from {2}', j.tasks.length, j.resources.length, f.name));
   });
 }

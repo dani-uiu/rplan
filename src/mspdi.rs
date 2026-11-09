@@ -239,10 +239,10 @@ pub fn import(xml: &str) -> Result<Project, String> {
     if root.name != "Project" {
         return Err(format!("this isn't a Microsoft Project XML file (root element is <{}>)", root.name));
     }
-    let mut p = Project::default();
-    p.name = root.get("Title").or(root.get("Name")).unwrap_or("Imported project").trim_end_matches(".xml").to_string();
+    let mut p = Project { name: root.get("Title").or(root.get("Name")).unwrap_or("Imported project").trim_end_matches(".xml").to_string(), ..Default::default() };
     if let Some(m) = root.get("MinutesPerDay").and_then(|x| x.parse::<i64>().ok()) {
-        if m > 0 {
+        // The .plan format allows 15 minutes to 24 hours per day.
+        if (15..=1440).contains(&m) {
             p.day_minutes = m;
         }
     }
@@ -285,9 +285,9 @@ pub fn import(xml: &str) -> Result<Project, String> {
                 Some("2") => ResKind::Cost,
                 _ => ResKind::Work,
             };
-            res.rate = r.get("StandardRate").and_then(|x| x.parse().ok()).unwrap_or(0.0);
-            res.overtime = r.get("OvertimeRate").and_then(|x| x.parse().ok()).unwrap_or(0.0);
-            res.per_use = r.get("CostPerUse").and_then(|x| x.parse().ok()).unwrap_or(0.0);
+            res.rate = r.get("StandardRate").and_then(parse_num).unwrap_or(0.0);
+            res.overtime = r.get("OvertimeRate").and_then(parse_num).unwrap_or(0.0);
+            res.per_use = r.get("CostPerUse").and_then(parse_num).unwrap_or(0.0);
             res.unit = clean(r.get("MaterialLabel").unwrap_or(""));
             res.group = clean(r.get("Group").unwrap_or(""));
             res.initials = clean(r.get("Initials").unwrap_or(""));
@@ -341,7 +341,7 @@ pub fn import(xml: &str) -> Result<Project, String> {
             let mut task = Task::new(id, &clean(t.get("Name").unwrap_or("Untitled")), if summary { p.day_minutes } else { dur.max(0) });
             task.level = level - 1;
             task.pct = t.get("PercentComplete").and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0).clamp(0.0, 100.0) as u8;
-            task.cost = t.get("FixedCost").and_then(|x| x.parse().ok()).unwrap_or(0.0);
+            task.cost = t.get("FixedCost").and_then(parse_num).unwrap_or(0.0);
             task.note = clean(t.get("Notes").unwrap_or(""));
             let cdate = t.get("ConstraintDate").and_then(|x| parse_datetime(x).ok());
             task.constraint = match (t.get("ConstraintType"), cdate) {
@@ -358,7 +358,7 @@ pub fn import(xml: &str) -> Result<Project, String> {
             let when = |k: &str| t.get(k).and_then(|x| parse_datetime(x).ok());
             task.actual_start = when("ActualStart");
             task.actual_finish = when("ActualFinish");
-            task.actual_cost = t.get("ActualCost").and_then(|x| x.parse::<f64>().ok()).filter(|c| *c > 0.0);
+            task.actual_cost = t.get("ActualCost").and_then(parse_num).filter(|c| *c > 0.0);
             task.priority = t.get("Priority").and_then(|x| x.parse::<u32>().ok()).unwrap_or(500).min(1000);
             task.inactive = t.get("Active") == Some("0");
             if t.get("Manual") == Some("1") && !summary {
@@ -388,7 +388,7 @@ pub fn import(xml: &str) -> Result<Project, String> {
                 let n: usize = b.get("Number").and_then(|x| x.parse().ok()).unwrap_or(0);
                 if n < BASELINES {
                     if let (Some(s), Some(f)) = (b.get("Start").and_then(|x| parse_datetime(x).ok()), b.get("Finish").and_then(|x| parse_datetime(x).ok())) {
-                        let cost = b.get("Cost").and_then(|x| x.parse().ok()).unwrap_or(0.0);
+                        let cost = b.get("Cost").and_then(parse_num).unwrap_or(0.0);
                         let work = b.get("Work").map(|w| parse_iso_dur(w, p.day_minutes)).unwrap_or(0);
                         task.baselines[n] = Some(Baseline { start: s, finish: f, cost, work });
                     }
@@ -402,7 +402,7 @@ pub fn import(xml: &str) -> Result<Project, String> {
         for a in asg.all("Assignment") {
             let (Some(tu), Some(ru)) = (a.get("TaskUID"), a.get("ResourceUID")) else { continue };
             let Some(name) = res_name.get(ru) else { continue };
-            let raw = a.get("Units").and_then(|x| x.parse::<f64>().ok()).unwrap_or(1.0);
+            let raw = a.get("Units").and_then(parse_num).filter(|u| *u >= 0.0).unwrap_or(1.0);
             let kind = p.resources.iter().find(|r| &r.name == name).map(|r| r.kind).unwrap_or(ResKind::Work);
             let asg = match kind {
                 ResKind::Work => Assign {
@@ -420,8 +420,8 @@ pub fn import(xml: &str) -> Result<Project, String> {
                     ..Assign::person(name, ((raw * 100.0).round() as u32).max(1))
                 },
                 // Materials: units are the quantity. Cost resources: the amount is in <Cost>.
-                ResKind::Material => Assign { amount: raw, form: Form::Qty, ..Assign::person(&name, 100) },
-                ResKind::Cost => Assign { amount: a.get("Cost").and_then(|x| x.parse().ok()).unwrap_or(0.0), form: Form::Money, ..Assign::person(&name, 100) },
+                ResKind::Material => Assign { amount: raw, form: Form::Qty, ..Assign::person(name, 100) },
+                ResKind::Cost => Assign { amount: a.get("Cost").and_then(parse_num).unwrap_or(0.0), form: Form::Money, ..Assign::person(name, 100) },
             };
             if let Some((_, t)) = tasks.iter_mut().find(|(u, _)| u == tu) {
                 if !t.who.iter().any(|w| &w.name == name) {

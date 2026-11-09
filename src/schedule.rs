@@ -84,7 +84,7 @@ pub struct Cals {
 }
 
 fn is_work(p: &Project, a: &Assign) -> bool {
-    p.resources.iter().find(|r| r.name == a.name).map_or(true, |r| r.kind == ResKind::Work)
+    p.resources.iter().find(|r| r.name == a.name).is_none_or(|r| r.kind == ResKind::Work)
 }
 
 pub fn calendars(p: &Project) -> Result<Cals, String> {
@@ -110,7 +110,7 @@ pub fn calendars(p: &Project) -> Result<Cals, String> {
             Some(n) => named.get(n).cloned().ok_or(format!("task {} uses calendar '{n}', which doesn't exist", t.id))?,
             None => base.clone(),
         };
-        let mut who: Vec<Resource> = t.who.iter().filter(|a| is_work(p, a)).map(|a| p.resource(&a.name)).filter(|r| r.week.is_some() || !r.off.is_empty()).collect();
+        let mut who: Vec<_> = t.who.iter().filter(|a| is_work(p, a)).map(|a| p.resource(&a.name)).filter(|r| r.week.is_some() || !r.off.is_empty()).collect();
         who.sort_by(|a, b| a.name.cmp(&b.name));
         if who.is_empty() && t.splits.is_empty() && t.lsplits.is_empty() && t.cal.is_none() {
             task.push(base.clone());
@@ -598,23 +598,29 @@ pub fn schedule(p: &Project) -> Result<Schedule, String> {
     schedule_with(p, &cals)
 }
 
-pub fn schedule_with(p: &Project, cals: &Cals) -> Result<Schedule, String> {
+/// The forward and backward passes, run twice when there are "as late as possible" tasks.
+fn passes(p: &Project, cals: &Cals, g: &Graph, eff: &[i64]) -> Run {
     let n = p.tasks.len();
-    let g = graph(p)?;
-    let eff: Vec<i64> = p.tasks.iter().map(|t| effective_duration(p, t)).collect();
-    let mut r = run(p, cals, &g, &eff, &HashMap::new());
+    let mut r = run(p, cals, g, eff, &HashMap::new());
     // "As late as possible": pin those tasks at their late start and schedule again.
     let alap: HashMap<usize, i64> = (0..n).filter(|&i| !g.summary[i] && p.tasks[i].constraint == Constraint::Alap && !r.s[i].started).map(|i| (i, r.s[i].ls)).collect();
     if !alap.is_empty() {
         let first = r.s.clone();
-        r = run(p, cals, &g, &eff, &alap);
+        r = run(p, cals, g, eff, &alap);
         for &i in alap.keys() {
             r.s[i].slack = first[i].slack;
             r.s[i].crit = first[i].crit;
         }
     }
+    r
+}
+
+pub fn schedule_with(p: &Project, cals: &Cals) -> Result<Schedule, String> {
+    let n = p.tasks.len();
+    let g = graph(p)?;
+    let eff: Vec<i64> = p.tasks.iter().map(|t| effective_duration(p, t)).collect();
     let cal = &*cals.base;
-    let Run { mut s, finish } = r;
+    let Run { mut s, finish } = passes(p, cals, &g, &eff);
 
     // Free slack, costs and earned value for leaves.
     let status_t = p.status.map(|d| (d + 1) * DAY);
@@ -644,8 +650,8 @@ pub fn schedule_with(p: &Project, cals: &Cals) -> Result<Schedule, String> {
             free = cal.work_between(s[i].ef, finish);
         }
         s[i].free_slack = free.clamp(0, s[i].slack.max(0));
-        let (cost, work) = if t.sub_info.is_none() && t.who.iter().any(|a| a.detailed() || p.resource(&a.name).rates.len() + p.resource(&a.name).caps.len() > 0) {
-            spread_cost(p, t, &*cals.task[i], &s[i], base_duration(p, t))
+        let (cost, work) = if t.sub_info.is_none() && t.who.iter().any(|a| a.detailed() || p.resources.iter().any(|r| r.name == a.name && !(r.rates.is_empty() && r.caps.is_empty()))) {
+            spread_cost(p, t, &cals.task[i], &s[i], base_duration(p, t))
         } else {
             task_cost(p, t, eff[i])
         };
@@ -791,7 +797,7 @@ pub fn loads(p: &Project, s: &Schedule) -> Vec<Load> {
                 l.work += sc.dur * a.units as i64 / 100 + t.overtime;
             }
             l.cost += if r.rates.is_empty() && !a.detailed() {
-                task_cost(&Project { tasks: vec![], ..p.clone_light() }, &Task { who: vec![a.clone()], cost: 0.0, overtime: t.overtime, ..Task::new(0, "", 0) }, sc.dur).0
+                r.rate * (sc.dur * a.units as i64 / 100) as f64 / 60.0 + r.overtime * t.overtime as f64 / 60.0 + r.per_use
             } else {
                 work_cost(&r, &days, t.overtime)
             };
@@ -821,52 +827,6 @@ pub fn loads(p: &Project, s: &Schedule) -> Vec<Load> {
         out.push(l);
     }
     out
-}
-
-impl Project {
-    /// A copy without tasks (cheap) for cost lookups.
-    fn clone_light(&self) -> Project {
-        Project { tasks: vec![], ..self.clone_no_tasks() }
-    }
-    /// Everything but the tasks, keeping all project settings.
-    fn clone_no_tasks_full(&self) -> Project {
-        Project {
-            name: self.name.clone(),
-            start: self.start,
-            status: self.status,
-            currency: self.currency.clone(),
-            week: self.week.clone(),
-            day_minutes: self.day_minutes,
-            exceptions: self.exceptions.clone(),
-            recurring: self.recurring.clone(),
-            calendars: self.calendars.clone(),
-            pool: self.pool.clone(),
-            resources: self.resources.clone(),
-            tasks: vec![],
-            fields: self.fields.clone(),
-            leveling: self.leveling,
-            warnings: vec![],
-        }
-    }
-    fn clone_no_tasks(&self) -> Project {
-        Project {
-            name: String::new(),
-            start: self.start,
-            status: None,
-            currency: String::new(),
-            week: self.week.clone(),
-            day_minutes: self.day_minutes,
-            exceptions: vec![],
-            recurring: vec![],
-            calendars: vec![],
-            pool: None,
-            resources: self.resources.clone(),
-            tasks: vec![],
-            fields: vec![],
-            leveling: self.leveling,
-            warnings: vec![],
-        }
-    }
 }
 
 /// Work minutes per day for each task (people's work, or the duration if nobody is assigned).
@@ -1018,7 +978,7 @@ pub fn update_progress(p: &mut Project) -> Result<usize, String> {
     let st_t = (st + 1) * DAY;
     let cals = calendars(p)?;
     // The plan as it was meant to go: without pushing unstarted work past the status date.
-    let plan = Project { status: None, tasks: p.tasks.clone(), ..p.clone_no_tasks_full() };
+    let plan = Project { status: None, ..p.clone() };
     let s = schedule_with(&plan, &cals)?;
     let summary = p.summary_flags();
     let mut n = 0;
@@ -1058,39 +1018,45 @@ pub fn level(p: &mut Project) -> Result<Vec<(u32, i64)>, String> {
     let opts = p.leveling;
     let summary = p.summary_flags();
     let people: Vec<Resource> = p.all_resources().into_iter().filter(|r| r.kind == ResKind::Work).collect();
-    let mut ignored: HashSet<(i64, String)> = HashSet::new();
+    // Each person's tasks as (task, units); who is on what doesn't change while leveling.
+    // Unstarted "as late as possible" tasks are left out: they follow the finish, so making
+    // room around them only pushes the finish and the clash along with it, for ever.
+    let floats = |t: &Task| t.constraint == Constraint::Alap && t.pct == 0 && t.actual_start.is_none() && t.actual_finish.is_none();
+    let on: Vec<Vec<(usize, u32)>> = people
+        .iter()
+        .map(|r| p.tasks.iter().enumerate().filter(|(i, t)| !summary[*i] && !floats(t)).filter_map(|(i, t)| t.who.iter().find(|a| a.name == r.name).map(|a| (i, a.units))).collect())
+        .collect();
+    let mut ignored: HashSet<(i64, usize)> = HashSet::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     let mut cals = calendars(p)?;
-    let finish0 = schedule_with(p, &cals)?.finish;
-    for _ in 0..5000 {
+    // Delays and pauses don't change the links or the durations: work them out once.
+    let g = graph(p)?;
+    let eff: Vec<i64> = p.tasks.iter().map(|t| effective_duration(p, t)).collect();
+    let finish0 = passes(p, &cals, &g, &eff).finish;
+    // Each step settles one clash; packed plans need about one step per pair of clashing tasks.
+    for _ in 0..5000 + p.tasks.len().pow(2) {
         if std::time::Instant::now() > deadline {
             break;
         }
-        let s = schedule_with(p, &cals)?;
-        let mut found: Option<(i64, String, Vec<(usize, u32)>)> = None;
-        for r in &people {
-            let mine: Vec<(usize, u32)> = p
-                .tasks
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !summary[*i] && s.tasks[*i].dur > 0 && !s.tasks[*i].inactive && !s.tasks[*i].done)
-                .filter_map(|(i, t)| t.who.iter().find(|a| a.name == r.name).map(|a| (i, a.units)))
-                .collect();
-            let mut times: Vec<i64> = mine.iter().map(|(i, _)| s.tasks[*i].es).collect();
+        let Run { s, finish: finish_now } = passes(p, &cals, &g, &eff);
+        let mut found: Option<(i64, usize, Vec<(usize, u32)>)> = None;
+        for (ri, r) in people.iter().enumerate() {
+            let mine: Vec<(usize, u32)> = on[ri].iter().copied().filter(|&(i, _)| s[i].dur > 0 && !s[i].inactive && !s[i].done).collect();
+            let mut times: Vec<i64> = mine.iter().map(|(i, _)| s[*i].es).collect();
             times.sort();
             times.dedup();
             for at in times {
                 if found.as_ref().is_some_and(|f| f.0 <= at) {
                     break;
                 }
-                if ignored.contains(&(at, r.name.clone())) {
+                if ignored.contains(&(at, ri)) {
                     continue;
                 }
                 // Only tasks actually working at that moment (not paused around it).
-                let active: Vec<(usize, u32)> = mine.iter().copied().filter(|(i, _)| s.tasks[*i].es <= at && at < s.tasks[*i].ef && (p.tasks[*i].elapsed || cals.task[*i].next_work(at) == at)).collect();
+                let active: Vec<(usize, u32)> = mine.iter().copied().filter(|(i, _)| s[*i].es <= at && at < s[*i].ef && (p.tasks[*i].elapsed || cals.task[*i].next_work(at) == at)).collect();
                 let used: u32 = active.iter().map(|a| a.1).sum();
                 if active.len() >= 2 && used > r.capacity_on(at.div_euclid(DAY)) {
-                    found = Some((at, r.name.clone(), active));
+                    found = Some((at, ri, active));
                     break;
                 }
             }
@@ -1098,7 +1064,7 @@ pub fn level(p: &mut Project) -> Result<Vec<(u32, i64)>, String> {
         let Some((at, who, mut active)) = found else { break };
         let fixed = |i: usize| {
             let t = &p.tasks[i];
-            matches!(t.constraint, Constraint::Mso(_) | Constraint::Mfo(_)) || t.manual.is_some() || (s.tasks[i].started && !opts.split)
+            matches!(t.constraint, Constraint::Mso(_) | Constraint::Mfo(_)) || t.manual.is_some() || (s[i].started && !opts.split)
         };
         active.retain(|&(i, _)| !fixed(i));
         if opts.order != LevelOrder::Id {
@@ -1106,7 +1072,7 @@ pub fn level(p: &mut Project) -> Result<Vec<(u32, i64)>, String> {
             active.retain(|&(i, _)| Some(p.tasks[i].priority) == min_priority);
         }
         match opts.order {
-            LevelOrder::Standard => active.sort_by_key(|&(i, _)| (std::cmp::Reverse(s.tasks[i].slack), std::cmp::Reverse(s.tasks[i].es), std::cmp::Reverse(p.tasks[i].id))),
+            LevelOrder::Standard => active.sort_by_key(|&(i, _)| (std::cmp::Reverse(s[i].slack), std::cmp::Reverse(s[i].es), std::cmp::Reverse(p.tasks[i].id))),
             // Priority / id order: the later task (by id) is the one that moves.
             LevelOrder::Priority | LevelOrder::Id => {
                 active.sort_by_key(|&(i, _)| std::cmp::Reverse(p.tasks[i].id));
@@ -1115,26 +1081,33 @@ pub fn level(p: &mut Project) -> Result<Vec<(u32, i64)>, String> {
         }
         // Candidates: delay the task, or (if allowed) pause it while the clash lasts.
         let mut best: Option<(i64, usize, i64, Option<(i64, i64)>)> = None;
-        let all_now: Vec<usize> = p.tasks.iter().enumerate().filter(|(i, t)| !summary[*i] && t.who.iter().any(|a| a.name == who) && s.tasks[*i].es <= at && at < s.tasks[*i].ef).map(|(i, _)| i).collect();
+        let all_now: Vec<usize> = on[who].iter().map(|&(i, _)| i).filter(|&i| s[i].es <= at && at < s[i].ef).collect();
         for &(v, _) in &active {
-            let target = all_now.iter().filter(|&&k| k != v).map(|&k| s.tasks[k].ef).filter(|&e| e > s.tasks[v].es).min();
+            let target = all_now.iter().filter(|&&k| k != v).map(|&k| s[k].ef).filter(|&e| e > s[v].es).min();
             let Some(target) = target else { continue };
-            if !s.tasks[v].started {
-                let add = cals.task[v].work_between(s.tasks[v].es, target).max(1);
+            if !s[v].started {
+                let add = cals.task[v].work_between(s[v].es, target).max(1);
+                // Within its slack the finish can't move, and no later candidate can beat that.
+                if s[v].slack >= add {
+                    if best.is_none_or(|b| finish_now < b.0) {
+                        best = Some((finish_now, v, add, None));
+                    }
+                    break;
+                }
                 p.tasks[v].delay += add;
-                let finish = schedule_with(p, &cals).map(|x| x.finish).unwrap_or(i64::MAX);
+                let finish = passes(p, &cals, &g, &eff).finish;
                 p.tasks[v].delay -= add;
                 if best.is_none_or(|b| finish < b.0) {
                     best = Some((finish, v, add, None));
                 }
             }
-            if opts.split && s.tasks[v].es < at && at.div_euclid(DAY) > s.tasks[v].es.div_euclid(DAY) {
+            if opts.split && s[v].es < at && at.div_euclid(DAY) > s[v].es.div_euclid(DAY) {
                 let pause = (at.div_euclid(DAY), ((target - 1).div_euclid(DAY)).max(at.div_euclid(DAY)));
                 if p.tasks[v].lsplits.contains(&pause) {
                     continue;
                 }
                 p.tasks[v].lsplits.push(pause);
-                let finish = calendars(p).and_then(|c| schedule_with(p, &c)).map(|x| x.finish).unwrap_or(i64::MAX);
+                let finish = calendars(p).map_or(i64::MAX, |c| passes(p, &c, &g, &eff).finish);
                 p.tasks[v].lsplits.pop();
                 if best.is_none_or(|b| finish < b.0) {
                     best = Some((finish, v, 0, Some(pause)));
@@ -1471,6 +1444,22 @@ task 4 | Free | 1d";
         assert_eq!(p.tasks[1].actual_start.map(fmt_datetime), Some("2026-11-11T08:00".into()));
         assert_eq!(p.tasks[2].pct, 0);
         assert_eq!(update_progress(&mut p).unwrap(), 0, "nothing more to do");
+    }
+
+    #[test]
+    fn leveling_leaves_as_late_as_possible_tasks_alone() {
+        // They follow the finish, so making room around them used to run away (delays of years).
+        for other in ["| 0 | alap", ""] {
+            let mut p = Project::parse(&format!("start 2026-11-09
+task 1 | A | 3d | | Ana | 0 | alap
+task 2 | B | 3d | | Ana {other}
+task 3 | C | 3d
+task 4 | D | 2d | | Ana
+task 5 | E | 1d | | Ana")).unwrap();
+            let changed = level(&mut p).unwrap();
+            assert!(changed.iter().all(|&(_, d)| d <= 5 * D), "{changed:?}");
+            assert!(p.tasks[0].delay == 0 && !changed.is_empty(), "the other clashes are still settled: {changed:?}");
+        }
     }
 
     #[test]

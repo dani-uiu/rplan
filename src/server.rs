@@ -71,6 +71,8 @@ fn icon(ctype: &'static str, bytes: &[u8]) -> Resp {
     r
 }
 const MAX_BODY: usize = 16 << 20;
+/// The request line and headers together.
+const MAX_HEAD: u64 = 64 << 10;
 
 pub struct Ctx {
     /// The project file being edited (can be switched from the app).
@@ -148,13 +150,15 @@ fn files_json(path: &str) -> String {
                 .map(|e| {
                     let file = e.file_name().to_string_lossy().to_string();
                     let modified = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis());
-                    let name = fs::read_to_string(e.path()).ok().and_then(|t| t.lines().find_map(|l| l.trim().strip_prefix("project ").map(|n| n.trim().to_string()))).unwrap_or_default();
+                    // The name is on one of the first lines: don't read whole files just to list them.
+                    let head = fs::File::open(e.path()).ok().map(|f| BufReader::new(f).lines().take(40).map_while(Result::ok));
+                    let name = head.and_then(|mut l| l.find_map(|l| l.trim().strip_prefix("project ").map(|n| n.trim().to_string()))).unwrap_or_default();
                     (modified, file, name)
                 })
                 .collect()
         })
         .unwrap_or_default();
-    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files.sort_by_key(|f| std::cmp::Reverse(f.0));
     let list: Vec<String> = files.iter().map(|(m, f, n)| format!(r#"{{"file":{},"name":{},"modified":{m}}}"#, js(f), js(n))).collect();
     format!(r#"{{"ok":true,"dir":{},"current":{},"files":[{}]}}"#, js(&dir.to_string_lossy()), js(&current), list.join(","))
 }
@@ -499,13 +503,11 @@ fn save(path: &str, p: &Project) -> Result<(), String> {
 
 /// Saves atomically, first remembering the old version in the history.
 fn save_noted(path: &str, p: &Project, note: &str, force: bool) -> Result<(), String> {
-    schedule(p)?; // never write a plan that can't be scheduled
+    let text = crate::plan_text(p)?; // never write a plan that can't be scheduled
     if let Ok(old) = fs::read_to_string(path) {
         history::record(path, &old, note, force);
     }
-    let tmp = format!("{path}.tmp");
-    fs::write(&tmp, p.serialize()).map_err(|e| format!("can't write {tmp}: {e}"))?;
-    fs::rename(&tmp, path).map_err(|e| format!("can't replace {path}: {e}"))
+    crate::write_atomic(path, &text)
 }
 
 fn allowed_hosts(port: u16) -> [String; 3] {
@@ -538,6 +540,29 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
         return r;
     }
     ctx.last_seen.store(now_secs(), Ordering::Relaxed);
+    // The page, its scripts and the keep-alive don't touch the project: answer them
+    // without waiting for a long change (like leveling) to finish.
+    match (req.method.as_str(), req.path.as_str()) {
+        ("GET", "/") => {
+            let mut r = Resp::new(200, "text/html; charset=utf-8", UI.replace("__RPLAN_TOKEN__", &ctx.token));
+            r.extra.push((
+                "Content-Security-Policy".into(),
+                "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'".into(),
+            ));
+            return r;
+        }
+        ("GET", a) if a.starts_with("/ui/") => {
+            return match ASSETS.iter().find(|(p, _, _)| *p == a) {
+                Some((_, ctype, body)) => Resp::new(200, ctype, *body),
+                None => Resp::err(404, "not found"),
+            }
+        }
+        ("GET", "/favicon.ico") => return icon("image/x-icon", ICON_ICO),
+        ("GET", "/favicon.svg") => return icon("image/svg+xml", ICON_SVG),
+        ("GET", "/apple-touch-icon.png" | "/icon.png") => return icon("image/png", ICON_PNG),
+        ("GET", "/api/ping") => return Resp::json(200, r#"{"ok":true}"#.into()),
+        _ => {}
+    }
     let _guard = ctx.lock.lock().unwrap_or_else(|e| e.into_inner());
     let current = ctx.path();
     let path = current.as_str();
@@ -579,23 +604,7 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
         Ok(p)
     };
     match (req.method.as_str(), req.path.as_str()) {
-        ("GET", "/") => {
-            let mut r = Resp::new(200, "text/html; charset=utf-8", UI.replace("__RPLAN_TOKEN__", &ctx.token));
-            r.extra.push((
-                "Content-Security-Policy".into(),
-                "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'".into(),
-            ));
-            r
-        }
-        ("GET", a) if a.starts_with("/ui/") => match ASSETS.iter().find(|(p, _, _)| *p == a) {
-            Some((_, ctype, body)) => Resp::new(200, ctype, *body),
-            None => Resp::err(404, "not found"),
-        },
-        ("GET", "/favicon.ico") => icon("image/x-icon", ICON_ICO),
-        ("GET", "/favicon.svg") => icon("image/svg+xml", ICON_SVG),
-        ("GET", "/apple-touch-icon.png" | "/icon.png") => icon("image/png", ICON_PNG),
         ("GET", "/api/project") => reply(load(path).and_then(|p| project_json(&p, path))),
-        ("GET", "/api/ping") => Resp::json(200, r#"{"ok":true}"#.into()),
         ("GET", "/api/files") => Resp::json(200, files_json(path)),
         ("POST", "/api/open") => match sibling(path, req.body.trim()).and_then(|np| load(&np).map(|p| (np, p))) {
             Ok((np, p)) => switch_to(np, &p),
@@ -640,8 +649,7 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
                 return r;
             }
             reply(mspdi::import(&req.body).and_then(|p| {
-                let mut p = parse_resolved(&p.serialize())?;
-                p.warnings.retain(|_| true);
+                let p = parse_resolved(&p.serialize())?;
                 save_noted(path, &p, "Import", true)?;
                 project_json(&p, path)
             }))
@@ -738,7 +746,7 @@ pub fn route(req: &Req, ctx: &Ctx) -> Resp {
 }
 
 fn read_req(st: &TcpStream) -> Result<Req, Resp> {
-    let mut rd = BufReader::new(st);
+    let mut rd = BufReader::new(st).take(MAX_HEAD);
     let mut line = String::new();
     rd.read_line(&mut line).map_err(|_| Resp::err(400, "bad request"))?;
     let mut parts = line.split_whitespace();
@@ -765,6 +773,10 @@ fn read_req(st: &TcpStream) -> Result<Req, Resp> {
             headers.push((k.trim().to_string(), v.trim().to_string()));
         }
     }
+    if rd.limit() == 0 {
+        return Err(Resp::err(431, "request headers too large"));
+    }
+    rd.set_limit(len as u64);
     let mut body = vec![0u8; len];
     rd.read_exact(&mut body).map_err(|_| Resp::err(400, "incomplete body"))?;
     let body = String::from_utf8(body).map_err(|_| Resp::err(400, "body must be UTF-8"))?;
@@ -779,6 +791,7 @@ fn write_resp(mut st: &TcpStream, r: Resp) {
         404 => "Not Found",
         409 => "Conflict",
         413 => "Payload Too Large",
+        431 => "Request Header Fields Too Large",
         _ => "Error",
     };
     let mut head = format!(
@@ -999,7 +1012,7 @@ mod tests {
         assert_eq!(route(&req("POST", "/api/level", &[OK, TOK, ("Origin", "https://evil.com")], ""), &c).code, 403, "foreign origin");
         assert_eq!(route(&req("GET", "/api/project", &[OK], ""), &c).code, 403, "reading needs the token too");
         // The file was never touched.
-        assert_eq!(fs::read_to_string(&c.path()).unwrap(), crate::DEMO);
+        assert_eq!(fs::read_to_string(c.path()).unwrap(), crate::DEMO);
     }
 
     #[test]
@@ -1014,7 +1027,7 @@ mod tests {
         assert!(body.starts_with(r#"{"ok":true"#) && body.contains("Backend API"));
         assert_eq!(route(&req("GET", "/api/export.xml?token=secret", &[OK], ""), &c).code, 200);
         assert_eq!(route(&req("POST", "/api/level", &[OK, TOK], ""), &c).code, 200);
-        assert!(fs::read_to_string(&c.path()).unwrap().contains("delay="));
+        assert!(fs::read_to_string(c.path()).unwrap().contains("delay="));
     }
 
     #[test]
@@ -1078,14 +1091,24 @@ mod tests {
         let c = ctx();
         fs::write(c.path(), "project X\nstart 2026-11-09\nweek Sat 09:00-13:00\ndayhours 7\ntask 1 | A | 1d").unwrap();
         assert_eq!(route(&req("POST", "/api/new", &[OK, TOK], ""), &c).code, 200);
-        let p = Project::parse(&fs::read_to_string(&c.path()).unwrap()).unwrap();
+        let p = Project::parse(&fs::read_to_string(c.path()).unwrap()).unwrap();
         assert!(p.tasks.is_empty());
         assert_eq!(p.name, "t", "named after the file");
         assert_eq!(p.start, crate::today());
         assert_eq!((p.week[6].clone(), p.day_minutes), (vec![(540, 780)], 420), "keeps the calendar");
         assert_eq!(route(&req("POST", "/api/sample", &[OK, TOK], ""), &c).code, 200);
-        assert!(fs::read_to_string(&c.path()).unwrap().contains("Website Launch"));
+        assert!(fs::read_to_string(c.path()).unwrap().contains("Website Launch"));
         assert_eq!(crate::blank_project("C:/x/My Project.plan").name, "My Project");
+    }
+
+    #[test]
+    fn never_writes_a_plan_that_would_not_read_back() {
+        let c = ctx();
+        let mut p = Project::parse(crate::DEMO).unwrap();
+        p.resources[0].capacity = 0;
+        assert!(save(&c.path(), &p).unwrap_err().contains("capacity"));
+        assert_eq!(fs::read_to_string(c.path()).unwrap(), crate::DEMO, "the file is untouched");
+        assert!(!Path::new(&format!("{}.tmp", c.path())).exists());
     }
 
     #[test]
@@ -1097,6 +1120,6 @@ mod tests {
         assert_eq!(route(&req("POST", "/api/save", &[OK, TOK, ("X-Rplan-Rev", "1")], crate::DEMO), &c).code, 409);
         let cur = rev(&c.path());
         assert_eq!(route(&req("POST", "/api/save", &[OK, TOK, ("X-Rplan-Rev", &cur)], crate::DEMO), &c).code, 200);
-        assert_eq!(fs::read_to_string(&c.path()).unwrap(), Project::parse(crate::DEMO).unwrap().serialize());
+        assert_eq!(fs::read_to_string(c.path()).unwrap(), Project::parse(crate::DEMO).unwrap().serialize());
     }
 }

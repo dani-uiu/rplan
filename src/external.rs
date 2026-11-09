@@ -109,13 +109,14 @@ pub fn other_loads(p: &Project, path: &str) -> HashMap<String, HashMap<i64, (u32
     let Some(pool) = &p.pool else { return out };
     let me = key(Path::new(path));
     let Ok(rd) = fs::read_dir(dir_of(path)) else { return out };
+    let pool_line = format!("pool {pool}");
     for e in rd.flatten().take(60) {
         let f = e.path();
         if !f.extension().is_some_and(|x| x.eq_ignore_ascii_case("plan")) || key(&f) == me {
             continue;
         }
         let Ok(text) = fs::read_to_string(&f) else { continue };
-        if !text.lines().any(|l| l.trim() == format!("pool {pool}")) {
+        if !text.lines().any(|l| l.trim() == pool_line) {
             continue;
         }
         let Ok(mut op) = Project::parse(&text) else { continue };

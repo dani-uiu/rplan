@@ -207,9 +207,19 @@ impl Calendar {
         if mins == 0 {
             return t;
         }
+        let wk = self.week_minutes();
         let mut left = mins;
         let d0 = t.div_euclid(DAY);
-        for day in d0..d0 + MAX_DAYS {
+        let mut day = d0;
+        while day < d0 + MAX_DAYS {
+            if day > d0 && left > wk {
+                let k = self.plain_weeks_from(day, (left - 1) / wk);
+                if k > 0 {
+                    left -= k * wk;
+                    day += 7 * k;
+                    continue;
+                }
+            }
             for &(a, b) in self.hours(day) {
                 let (s, e) = (day * DAY + a as i64, day * DAY + b as i64);
                 if e <= t {
@@ -221,6 +231,7 @@ impl Calendar {
                 }
                 left -= e - st;
             }
+            day += 1;
         }
         t + mins
     }
@@ -233,9 +244,19 @@ impl Calendar {
         if mins == 0 {
             return t;
         }
+        let wk = self.week_minutes();
         let mut left = mins;
         let d0 = (t - 1).div_euclid(DAY);
-        for day in (d0 - MAX_DAYS..=d0).rev() {
+        let mut day = d0;
+        while day >= d0 - MAX_DAYS {
+            if day < d0 && left > wk {
+                let k = self.plain_weeks_until(day, (left - 1) / wk);
+                if k > 0 {
+                    left -= k * wk;
+                    day -= 7 * k;
+                    continue;
+                }
+            }
             for &(a, b) in self.hours(day).iter().rev() {
                 let (s, e) = (day * DAY + a as i64, day * DAY + b as i64);
                 if s >= t {
@@ -247,6 +268,7 @@ impl Calendar {
                 }
                 left -= en - s;
             }
+            day -= 1;
         }
         t - mins
     }
@@ -256,14 +278,47 @@ impl Calendar {
         if b < a {
             return -self.work_between(b, a);
         }
+        let (first, last) = (a.div_euclid(DAY), (b - 1).div_euclid(DAY));
         let mut n = 0;
-        for day in a.div_euclid(DAY)..=(b - 1).div_euclid(DAY).max(a.div_euclid(DAY)) {
+        let mut day = first;
+        while day <= last.max(first) {
+            if day > first {
+                let k = self.plain_weeks_from(day, (last - day) / 7);
+                if k > 0 {
+                    n += k * self.week_minutes();
+                    day += 7 * k;
+                    continue;
+                }
+            }
             for &(x, y) in self.hours(day) {
                 let (s, e) = (day * DAY + x as i64, day * DAY + y as i64);
                 n += (e.min(b) - s.max(a)).max(0);
             }
+            day += 1;
         }
         n
+    }
+
+    /// Working minutes in a week without exceptions.
+    fn week_minutes(&self) -> i64 {
+        self.week.iter().flatten().map(|&(a, b)| (b - a) as i64).sum::<i64>().max(1)
+    }
+
+    /// How many whole weeks starting on `day` (at most `max`) have no exceptions:
+    /// long walks jump over them instead of going day by day.
+    fn plain_weeks_from(&self, day: i64, max: i64) -> i64 {
+        if max <= 0 {
+            return 0;
+        }
+        self.exceptions.range(day..).next().map_or(max, |(d, _)| ((d - day) / 7).min(max))
+    }
+
+    /// The same going back: whole weeks ending on `day`.
+    fn plain_weeks_until(&self, day: i64, max: i64) -> i64 {
+        if max <= 0 {
+            return 0;
+        }
+        self.exceptions.range(..=day).next_back().map_or(max, |(d, _)| ((day - d) / 7).min(max))
     }
 }
 
@@ -708,6 +763,38 @@ fn run_str(run: &[usize]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Long walks jump over plain weeks; the answers must match a day-by-day walk.
+    #[test]
+    fn week_jumps_match_walking_day_by_day() {
+        let slow_between = |c: &Calendar, a: i64, b: i64| -> i64 { (a.div_euclid(DAY)..=(b - 1).div_euclid(DAY)).flat_map(|d| c.hours(d).iter().map(move |&(x, y)| ((d * DAY + y as i64).min(b) - (d * DAY + x as i64).max(a)).max(0))).sum() };
+        let mut seed = 7u64;
+        let mut rnd = |n: i64| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((seed >> 33) as i64).rem_euclid(n)
+        };
+        let day0 = parse_date("2026-01-01").unwrap();
+        for round in 0..40 {
+            let mut week = default_week();
+            if round % 3 == 1 {
+                week[6] = vec![(540, 780)];
+                week[3] = vec![(0, 1440)];
+            }
+            let ex: Vec<Exception> = (0..round).map(|_| (day0 + rnd(700), rnd(4))).map(|(from, len)| Exception { from, to: from + len, name: String::new(), hours: if len == 3 { vec![(600, 660)] } else { vec![] } }).collect();
+            let c = Calendar::new(week, &ex).unwrap();
+            for _ in 0..200 {
+                let (t, mins) = (day0 * DAY + rnd(400 * DAY), 1 + rnd(120_000));
+                let (fwd, back) = (c.add(t, mins), c.sub(t, mins));
+                // `add` gives the earliest moment with that much work behind it, `sub` the latest.
+                assert_eq!(slow_between(&c, t, fwd), mins, "add {t} {mins}");
+                assert!(slow_between(&c, t, fwd - 1) < mins, "add isn't the earliest: {t} {mins}");
+                assert_eq!(slow_between(&c, back, t), mins, "sub {t} {mins}");
+                assert!(slow_between(&c, back + 1, t) < mins, "sub isn't the latest: {t} {mins}");
+                let b = t + rnd(500 * DAY);
+                assert_eq!(c.work_between(t, b), slow_between(&c, t, b), "between {t} {b}");
+            }
+        }
+    }
 
     fn cal() -> Calendar {
         Calendar::new(default_week(), &[]).unwrap()
